@@ -1,3 +1,6 @@
 LortModMenu/settings.txt
 LortModMenu/menu.log
 LortModMenu/selftest.flag
+LortModMenu/open.flag
+LortModMenu/pending_unlocks.txt
+LortModMenu/*.before-unlock
