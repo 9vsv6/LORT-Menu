@@ -435,6 +435,66 @@ function animStep()
     local rate = animState.base * ((v >= 10) and 25 or v)
     if not near(ai:Montage_GetPlayRate(m), rate) then ai:Montage_SetPlayRate(m, rate) end
 end
+-- ATTACK SIZE
+-- Projectiles: every ABWProjectile (arrows, orbs, daggers, bombs, mines...) fired by the player gets its actor
+-- scaled (collider + mesh + fx) and its explosion DamageRadius scaled to match.
+local projDone = {}          -- projectile address -> true (already scaled)
+local projSweep = 0
+function projectileStep()
+    local v = byId.projsize and eff(byId.projsize) or 1
+    if v == 1 then return end
+    local pawn = getPawn()
+    if not pawn then return end
+    local pa, pc = addr(pawn), addr(getPC())
+    projSweep = projSweep + 1
+    if projSweep > 600 then projDone = {}; projSweep = 0 end
+    for _, pr in ipairs(FindAllOf("BWProjectile") or {}) do
+        local a = addr(pr)
+        if a ~= 0 and not projDone[a] then
+            projDone[a] = true
+            pcall(function()
+                local mine = false
+                pcall(function() mine = addr(pr:GetInstigator()) == pa end)
+                if not mine then pcall(function() local o = pr:GetOwner(); mine = addr(o) == pa or addr(o) == pc end) end
+                if mine and not pr:GetFullName():find("Default__", 1, true) then
+                    local sc = pr:GetActorScale3D()
+                    pr:SetActorScale3D({ X = sc.X * v, Y = sc.Y * v, Z = sc.Z * v })
+                    pcall(function() if pr.DamageRadius and pr.DamageRadius > 0 then pr.DamageRadius = pr.DamageRadius * v end end)
+                end
+            end)
+        end
+    end
+end
+slider("projsize", "Projectile Size", 1, 1, 5, 0.25, fmtX, nil)
+
+-- Melee: player swings are UBWAnimNotify_MeleeAttack notifies (enemies use BWAnimNotify_NPCMeleeAttack),
+-- each with an FBWDamageShape. Scale radius / box / arc / offset from the stored originals.
+local meleeOrig = {}
+slider("meleesize", "Melee Range", 1, 1, 4, 0.25, fmtX, function(it)
+    local v = eff(it)
+    for _, n in ipairs(FindAllOf("BWAnimNotify_MeleeAttack") or {}) do
+        local a = addr(n)
+        if a ~= 0 then
+            pcall(function()
+                local sh = n.DamageShape
+                local o = meleeOrig[a]
+                if not o then
+                    if v == 1 then return end
+                    o = { r = sh.Radius, hh = sh.HalfHeight, ar = sh.ArcRadius, af = sh.ArcForwardOffset,
+                          bx = sh.BoxExtent.X, by = sh.BoxExtent.Y, bz = sh.BoxExtent.Z,
+                          lx = sh.RelativeLocationOffset.X, ly = sh.RelativeLocationOffset.Y, lz = sh.RelativeLocationOffset.Z, v = 1 }
+                    meleeOrig[a] = o
+                end
+                if near(o.v, v) then return end
+                sh.Radius = o.r * v; sh.HalfHeight = o.hh * v; sh.ArcRadius = o.ar * v; sh.ArcForwardOffset = o.af * v
+                sh.BoxExtent = { X = o.bx * v, Y = o.by * v, Z = o.bz * v }
+                sh.RelativeLocationOffset = { X = o.lx * v, Y = o.ly * v, Z = o.lz * v }
+                o.v = v
+            end)
+        end
+    end
+end)
+
 slider("crit", "Crit Chance", 0, 0, 1, 0.05, function(v) return v == 0 and "game" or fmtPct(v) end, function(it)
     local v = eff(it)
     applyAttr("BWCombatAttributes", "CriticalChance", function(o) if v == 0 then return nil end return v end)
@@ -457,6 +517,21 @@ end, function(it)
 end)
 
 header("FUN")
+-- FOV: PlayerController:FOV(angle) locks the camera manager's FOV (overrides the game camera); FOV(0) unlocks.
+local fovState = { applied = nil, pc = 0 }
+toggle("fovon", "Custom FOV", function(it)
+    local pc = getPC()
+    if not pc then return end
+    local want = eff(it) and math.floor(byId.fov.value + 0.5) or 0
+    if fovState.pc ~= addr(pc) then fovState.pc = addr(pc); fovState.applied = nil end
+    if want == 0 and (fovState.applied == nil or fovState.applied == 0) then fovState.applied = 0; return end
+    if fovState.applied ~= want then
+        pc:FOV(want)
+        fovState.applied = want
+    end
+end)
+slider("fov", "FOV Angle", 100, 60, 150, 5, function(v) return string.format("%d", math.floor(v + 0.5)) end, nil)
+
 slider("timescale", "Game Speed", 1, 0.1, 3, 0.1, fmtX, function(it)
     local v = eff(it)
     local pc = getPC()
@@ -552,6 +627,60 @@ function flyStep(dtMs)
     end
 end
 toggle("notarget", "Enemies Ignore Me", function(it) syncCheatToggle("ai", "NoTarget", eff(it)) end)
+-- BIG HEAD: ABP_Player has FAnimNode_ModifyBone nodes. Point one at the "Head" bone with a replace-scale,
+-- then bounce the mesh LOD so the anim graph re-caches its bone references (CacheBones -> InitializeBoneReferences).
+local bigHead = { applied = nil, ai = 0, orig = nil, lodStep = 0 }
+local function headNode(ai)
+    local n
+    pcall(function() n = ai.AnimGraphNode_ModifyBone_1 end)
+    return n
+end
+local function bigHeadStep(on, scale)
+    local pawn = getPawn()
+    if not pawn then return end
+    local mesh = pawn.Mesh
+    if not valid(mesh) then return end
+    local ai = mesh:GetAnimInstance()
+    if not valid(ai) then return end
+    local node = headNode(ai)
+    if not node then return end
+    if bigHead.ai ~= addr(ai) then
+        bigHead.ai = addr(ai); bigHead.applied = nil
+        bigHead.orig = {
+            bone = node.BoneToModify.BoneName:ToString(), sx = node.Scale.X, sy = node.Scale.Y, sz = node.Scale.Z,
+            mode = node.ScaleMode, space = node.ScaleSpace, alphaType = node.AlphaInputType, alpha = node.Alpha,
+        }
+        log(string.format("bighead: node bone=%s scale=%.2f mode=%s space=%s alpha=%.2f", bigHead.orig.bone, bigHead.orig.sx,
+            tostring(bigHead.orig.mode), tostring(bigHead.orig.space), bigHead.orig.alpha))
+    end
+    local want = on and scale or 0
+    if bigHead.applied == want then
+        if bigHead.lodStep == 1 then mesh:SetForcedLOD(0); bigHead.lodStep = 0 end   -- second half of the LOD bounce
+        return
+    end
+    local o = bigHead.orig
+    if on then
+        node.BoneToModify.BoneName = FName("Head")
+        node.Scale = { X = scale, Y = scale, Z = scale }
+        node.ScaleMode = 1          -- BMM_Replace
+        node.ScaleSpace = 3         -- BCS_BoneSpace
+        node.AlphaInputType = 0     -- Float
+        node.Alpha = 1
+    else
+        node.BoneToModify.BoneName = FName(o.bone)
+        node.Scale = { X = o.sx, Y = o.sy, Z = o.sz }
+        node.ScaleMode = o.mode; node.ScaleSpace = o.space
+        node.AlphaInputType = o.alphaType; node.Alpha = o.alpha
+    end
+    mesh:SetForcedLOD(2)            -- LOD change -> required bones recalculated -> node bone index re-cached
+    bigHead.lodStep = 1
+    bigHead.applied = want
+end
+toggle("bighead", "Big Head Mode", function(it)
+    bigHeadStep(eff(it), byId.headsize and byId.headsize.value or 2.5)
+end)
+slider("headsize", "Head Size", 2.5, 1.5, 5, 0.25, fmtX, nil)
+
 toggle("chaos", "CHAOS MODE", function(it) chaos.on = it.value end)
 
 header("ACTIONS")
@@ -750,6 +879,488 @@ local function applyPendingUnlocks()
 end
 safe("apply pending unlocks", applyPendingUnlocks)
 
+-- SPAWNER: give any weapon / powerup / item. IDs are the row names of the game's DataTables
+-- (PlayerItems_Equipment, PowerupsTable, PlayerItems_*), read from memory with tools/rowdump.py.
+local SPAWN_WEAPONS = {
+    "Weapon_Crossbow",
+    "Weapon_Broadsword",
+    "Weapon_Sledgehammer",
+    "Weapon_Spinhammer",
+    "Weapon_ArcaneStaff",
+    "Weapon_LightningWand",
+    "Weapon_MagicSword",
+    "Weapon_Swiftbow",
+    "Weapon_Strongbow",
+    "Weapon_Blinkblades",
+    "Weapon_Pistol",
+    "Weapon_ClubShield",
+    "Weapon_AssaultRifle",
+    "Weapon_BaseballBat",
+    "Weapon_SwordShield",
+    "Weapon_Monsterhammer",
+    "Weapon_Katana",
+    "Weapon_ThrowingDaggers",
+    "Weapon_HolyClaymore",
+    "Weapon_VoidCrossbow",
+    "Weapon_VoidWand",
+    "Weapon_VoidStaff",
+}
+local SPAWN_POWERUPS = {
+    "powerup_strength",
+    "powerup_agility",
+    "powerup_intelligence",
+    "powerup_attackspeed",
+    "powerup_damageboost",
+    "powerup_increasedhealth",
+    "powerup_increasedmovementspeed",
+    "powerup_jumpheight",
+    "powerup_thorns",
+    "powerup_bulwark",
+    "powerup_critchance",
+    "powerup_parrychance",
+    "powerup_armor",
+    "powerup_magicresist",
+    "powerup_cooldownrate",
+    "powerup_healingreceived",
+    "powerup_damage_stunned",
+    "powerup_lifesteal",
+    "powerup_healonkill",
+    "powerup_extraskillcharge",
+    "powerup_healoncrit",
+    "powerup_maxhealthonkill",
+    "powerup_burningonhit",
+    "powerup_stunonhit",
+    "powerup_slowonhit",
+    "powerup_healthregen",
+    "powerup_knockback",
+    "powerup_critdamage",
+    "powerup_spawngoldonhit",
+    "powerup_block",
+    "powerup_increasedamagelowhealth",
+    "powerup_bigdamage",
+    "powerup_increasedamageclose",
+    "powerup_healcharge",
+    "powerup_increasedsprintspeed",
+    "powerup_spawngoldoncrit",
+    "powerup_spawngoldondmgreceived",
+    "powerup_bonustohighhpenemies",
+    "powerup_bonusdmgtoboss",
+    "powerup_secondchance",
+    "powerup_bonusdmgtofactiongoblin",
+    "powerup_bonusdmgtofactionskeleton",
+    "powerup_bonusdmgtofactionslime",
+    "powerup_increasedrunandsprint",
+    "powerup_clapback",
+    "powerup_critchancecritdmg",
+    "powerup_magicdamageboost",
+    "powerup_physicaldamageboost",
+    "powerup_bleedonhit",
+    "powerup_maxphysresistonhurt",
+    "powerup_increasedmgonkill",
+    "powerup_increaseatkspeedonkill",
+    "powerup_electricityonhit",
+    "powerup_buffchanceonhitatkspeed",
+    "powerup_buffchanceonhitmovementspeed",
+    "powerup_bonusdmgduringnight",
+    "powerup_bonusdmgduringday",
+    "powerup_damageonkillexplosion",
+    "powerup_healonkillaoe",
+    "powerup_slowonhurt",
+    "powerup_buffchanceonabilityhitcritdamage",
+    "powerup_buffchanceonabilityhitparry",
+    "powerup_damageonhitaoe",
+    "powerup_cursedcritchancecritdamage",
+    "powerup_increasestatusduration",
+    "powerup_pinball",
+    "powerup_pingpongslow",
+    "powerup_pingpongfire",
+    "powerup_spawnpickuponkillhealth",
+    "powerup_spawnpickuponkillmovespeed",
+    "powerup_spawnpickuponkillcrit",
+    "powerup_lightningstrike",
+    "powerup_bigcritdamage",
+    "powerup_bigcooldownrate",
+    "powerup_explodeonhit",
+    "powerup_sunder",
+    "powerup_bigtank",
+    "powerup_aura_pulsedamage",
+    "powerup_aura_tickdamage",
+    "powerup_aura_armorbuff",
+    "powerup_aura_movespeedliferegen",
+    "powerup_aura_lifesteal",
+    "powerup_bonusdmgtobeards",
+    "powerup_bonusdmgtowearinghats",
+    "powerup_bonusdmgtocasters",
+    "powerup_bonusdmgtofighters",
+    "powerup_bigcritchance",
+    "powerup_bonustohighhpenemiesbig",
+    "powerup_hybriddamageboost",
+    "powerup_increasedhealthmedium",
+    "powerup_increasedhealthbig",
+    "powerup_buffchanceonhitmagicalphysical",
+    "powerup_healthregencurse",
+    "powerup_increasedamageability",
+    "powerup_increasedamageovertime",
+    "powerup_damageonkillburning",
+    "powerup_dodgecharge",
+    "powerup_magicalsunder",
+    "powerup_poisononhit",
+    "powerup_buffonability_movementspeed",
+    "powerup_mediumdamageproc",
+    "powerup_aoedamageoncrit",
+    "powerup_spawnmineonability",
+    "powerup_lilcritdamage",
+    "powerup_lilcooldownrate",
+}
+local SPAWN_ITEMS = {
+    "Item_Key_POI_Foot",
+    "Item_Key_WeaponChest",
+    "Item_Key_POI_MushroomTower",
+    "Item_Key_POI_MushroomMadness",
+    "Item_Key_POI_Labyrinth",
+    "item_tooter_bone",
+    "item_tooter_grand",
+    "Quest_Minibosses_Onion",
+    "Quest_Ingredient",
+    "Quest_EggEgg",
+    "Quest_EndingThing_Incomplete",
+    "Quest_RangerPictures_01",
+    "Quest_RangerPictures_02",
+    "Quest_RangerPictures_03",
+    "Quest_RangerPictures_04",
+    "item_trash_rottenegg",
+    "item_trash_rock",
+    "item_trash_brick",
+    "item_trash_beatpad",
+    "item_trash_football",
+    "item_trash_soccerball",
+    "item_trash_basketball",
+    "item_trash_volleyball",
+}
+
+-- powerup ids are run-together lowercase words: split them greedily with a small game dictionary
+local WORDS = {}
+for w in ([[bonus dmg damage to faction goblin skeleton slime boss beards wearing hats casters fighters
+    high hp enemies enemy big lil medium increase increased max health on hit kill crit chance critical
+    speed attack atk move movement sprint run and jump height heal healing received
+    regen life steal thorns bulwark parry armor magic magical physical hybrid resist resistance
+    hurt cooldown rate extra skill block low close stunned stun slow burning burn bleed poison electricity
+    lightning strike explode explosion knockback spawn gold pickup second clap back cursed
+    curse status duration pinball ping pong fire sunder tank aura pulse tick buff ability over time night
+    day mine proc aoe strength agility intelligence boost dodge during ingredient trash rotten egg
+    rock brick beat pad football soccer ball basketball volleyball tooter bone grand key poi foot weapon
+    chest mushroom tower madness labyrinth minibosses onion ending thing incomplete ranger pictures]]):gmatch("%a+") do
+    WORDS[w] = true
+end
+local function splitWords(t)
+    -- optimal split: known words cost 1, each unknown letter costs 4 (fewest unknown letters wins)
+    local n = #t
+    local cost, prev = { [0] = 0 }, {}
+    for i = 1, n do
+        cost[i] = cost[i - 1] + 4; prev[i] = i - 1
+        for j = 1, i do
+            if WORDS[t:sub(j, i)] and cost[j - 1] + 1 < cost[i] then cost[i] = cost[j - 1] + 1; prev[i] = j - 1 end
+        end
+    end
+    local parts, i, buf = {}, n, ""
+    while i > 0 do
+        local j = prev[i]
+        local w = t:sub(j + 1, i)
+        if i - j == 1 and not WORDS[w] then buf = w .. buf
+        else
+            if buf ~= "" then table.insert(parts, 1, buf); buf = "" end
+            table.insert(parts, 1, w)
+        end
+        i = j
+    end
+    if buf ~= "" then table.insert(parts, 1, buf) end
+    return table.concat(parts, " ")
+end
+
+local function prettyId(id)
+    local t = id:gsub("^Weapon_", ""):gsub("^powerup_", ""):gsub("^[Ii]tem_", ""):gsub("^Quest_", "Quest ")
+    t = t:gsub("(%l)(%u)", "%1 %2")
+    local parts = {}
+    for w in t:gmatch("[^_%s]+") do
+        parts[#parts + 1] = (w:match("^%l+$") and splitWords(w) or w)
+    end
+    t = table.concat(parts, " "):gsub("(%a)(%w*)", function(a, b) return a:upper() .. b end)
+    return (t:gsub("%f[%a]Hp%f[%A]", "HP"):gsub("%f[%a]Aoe%f[%A]", "AoE"):gsub("%f[%a]Poi%f[%A]", "POI"))
+end
+
+local function giveItem(id, count)
+    local lvl = math.floor(byId.spawnlevel and byId.spawnlevel.value or 1)
+    cheat("player"):AddItemToInventory(FName(id), count or 1, lvl)
+end
+local function givePowerup(id) cheat("gameplay"):GivePowerup(id) end
+
+local SPAWN_MONSTERS = {
+    "boss_ranger",
+    "boss_forestsoul",
+    "boss_stomper",
+    "boss_necromancer",
+    "Boss_Lich",
+    "Boss_Stewart",
+    "GoblinTreasure_Gold",
+    "GoblinTreasure_Powerup",
+    "GoblinTreasure_RuneJuice",
+    "GoblinTreasure_Weapon",
+    "GoblinMage",
+    "GoblinPeasant",
+    "GoblinTrapper",
+    "GoblinArcher",
+    "GoblinFighter",
+    "GoblinBrawler",
+    "GoblinLobber",
+    "GoblinSlimecaller",
+    "GoblinThief",
+    "GoblinWarchief",
+    "GoblinBomber",
+    "GoblinPoacher",
+    "GoblinWizard",
+    "GoblinArbalest",
+    "GoblinShield",
+    "GoblinWarrior",
+    "GoblinDefender",
+    "GoblinSlimemancer",
+    "GoblinSharpshooter",
+    "GoblinSmusher",
+    "GoblinWarlord",
+    "Slime",
+    "SlimeBoss",
+    "SlimeFire",
+    "SlimeViking",
+    "SpiritBalaclava",
+    "SpiritSquidhelmet",
+    "trailerman",
+    "wraith",
+    "Ghost",
+    "Goblin",
+    "GoblinLieutenantMap1",
+    "SlimeKing",
+    "GoblinSniper",
+    "GoblinChampion",
+    "GoblinMedic",
+    "GoblinBubbler",
+    "GoblinRifleman",
+    "GoblinFisherman",
+    "InsectMosquito",
+    "SpiritSnowball",
+    "SlimeForest",
+    "GoblinSkeletonFodder",
+    "GoblinLieutenantFodder",
+    "SpiritFodder",
+    "TrollSapper",
+}
+local function spawnMonster(id)
+    local n = math.floor(byId.spawncount and byId.spawncount.value or 1)
+    cheat("gameplay"):Spawn(id, n)
+end
+
+-- tile grids shown under a section's rows: GRIDS[tab] = { { title, list, onClick(id) }, ... }
+GRIDS = {
+    MODEL = { { "Character models loaded right now  (click to wear; enter a run for more enemies)", {}, nil, dynamic = true } },
+    WEAPONS = { { "All weapons  (click to get one)", SPAWN_WEAPONS, function(id) giveItem(id, 1); toast("Gave: " .. prettyId(id), 1.4) end } },
+    ITEMS = {
+        { "Powerups", SPAWN_POWERUPS, function(id) givePowerup(id); toast("Powerup: " .. prettyId(id), 1.4) end },
+        { "Items", SPAWN_ITEMS, function(id) giveItem(id, 1); toast("Gave: " .. prettyId(id), 1.4) end },
+    },
+    MONSTERS = { { "Monsters & bosses  (spawned near you)", SPAWN_MONSTERS, function(id)
+        spawnMonster(id)
+        toast("Spawned " .. math.floor(byId.spawncount.value) .. "x " .. prettyId(id), 1.6)
+    end } },
+}
+
+header("WEAPONS")
+slider("spawnlevel", "Item Level", 1, 1, 30, 1, fmtInt, nil)
+action("Give All Weapons", function()
+    for _, id in ipairs(SPAWN_WEAPONS) do safe("give " .. id, giveItem, id, 1) end
+    toast("All " .. #SPAWN_WEAPONS .. " weapons given", 2)
+end)
+action("Random Weapon", function()
+    local id = SPAWN_WEAPONS[math.random(#SPAWN_WEAPONS)]
+    giveItem(id, 1); toast("Random weapon: " .. prettyId(id), 2)
+end)
+
+header("ITEMS")
+action("Random Powerup", function()
+    local id = SPAWN_POWERUPS[math.random(#SPAWN_POWERUPS)]
+    givePowerup(id); toast("Random powerup: " .. prettyId(id), 2)
+end)
+action("Give 5 Random Powerups", function()
+    for _ = 1, 5 do safe("powerup", givePowerup, SPAWN_POWERUPS[math.random(#SPAWN_POWERUPS)]) end
+    toast("5 random powerups!", 2)
+end)
+action("Give Every Powerup ", function() cheat("gameplay"):GiveEveryPowerup(); toast("ALL the powerups") end)
+
+header("MONSTERS")
+slider("spawncount", "Spawn Count", 1, 1, 20, 1, fmtInt, nil)
+action("Spawn Random Boss", function()
+    local bosses = {}
+    for _, id in ipairs(SPAWN_MONSTERS) do if id:lower():find("boss") or id:find("King") then bosses[#bosses + 1] = id end end
+    local id = bosses[math.random(#bosses)]
+    spawnMonster(id); toast("BOSS: " .. prettyId(id), 2)
+end)
+action("Kill Everything ", function()
+    local pawn, d = getPawn(), damageStatics()
+    if not pawn or not valid(d) then return end
+    local n = 0
+    for _, e in ipairs(enemies()) do
+        safe("kill", function() d:ApplyDamage(pawn, e, 999999.0, 99999.0, 4, 0, 0, { X = 0, Y = 0, Z = 0 }, pawn) end)
+        n = n + 1
+    end
+    toast("Smited " .. n .. " enemies")
+end)
+
+-- MODEL: wear any character model the game has loaded (USkeletalMeshComponent::SetSkeletalMeshAsset).
+-- Hero meshes are loaded on demand; everything else = whatever is in memory right now (camp NPCs, enemies near you).
+local HERO_MESHES = {
+    { "Wizard", "/Game/Art/Characters/Wizard/SK_Player_Wizard.SK_Player_Wizard" },
+    { "Warrior", "/Game/Art/Characters/Warrior/SK_Player_Warrior.SK_Player_Warrior" },
+    { "Ranger", "/Game/Art/Characters/Ranger/SK_Player_Ranger.SK_Player_Ranger" },
+    { "Rogue", "/Game/Art/Characters/Rogue/SK_Player_Rogue_01.SK_Player_Rogue_01" },
+    { "Paladin", "/Game/Art/Characters/Paladin/SK_Player_Paladin.SK_Player_Paladin" },
+}
+local modelState = { orig = nil }
+MODEL_ENTRIES = {}
+
+local function loadMesh(path)
+    local m = StaticFindObject(path)
+    if not valid(m) and LoadAsset then pcall(function() m = LoadAsset(path) end) end
+    if valid(m) then return m end
+end
+
+local function meshLabel(name)
+    local t = name:gsub("^SK_", ""):gsub("^LORT_", ""):gsub("^Player_", ""):gsub("_0%d$", "")
+    return (t:gsub("_", " "):gsub("(%l)(%u)", "%1 %2"))
+end
+
+function LIST_MODELS()
+    local list, seen = {}, {}
+    local function add(mesh, label, hero)
+        local key = mesh:GetFullName()
+        if seen[key] then return end
+        seen[key] = true
+        list[#list + 1] = { key = key, mesh = mesh, label = label, hero = hero }
+    end
+    for _, h in ipairs(HERO_MESHES) do
+        local m = loadMesh(h[2])
+        if m then add(m, h[1] .. " (hero)", true) end
+    end
+    for _, m in ipairs(FindAllOf("SkeletalMesh") or {}) do
+        if valid(m) then
+            local full = m:GetFullName()
+            if full:find("/Game/Art/Characters/", 1, true) and not full:find("Default__", 1, true) then
+                add(m, meshLabel(m:GetFName():ToString()), false)
+            end
+        end
+    end
+    -- remember which animation setup each model's real owner uses (for "Use Model's Own Animations")
+    for _, c in ipairs(FindAllOf("SkeletalMeshComponent") or {}) do
+        pcall(function()
+            local a = c:GetSkeletalMeshAsset()
+            if valid(a) then
+                local key = a:GetFullName()
+                for _, e in ipairs(list) do
+                    if e.key == key and not e.animClass then
+                        local ai = c:GetAnimInstance()
+                        if valid(ai) then e.animClass = ai:GetClass() end
+                    end
+                end
+            end
+        end)
+    end
+    MODEL_ENTRIES = {}
+    for _, e in ipairs(list) do MODEL_ENTRIES[e.key] = e end
+    return list
+end
+
+-- The worn model is a second SkeletalMeshComponent that copies the hero's pose every frame
+-- (SetLeaderPoseComponent, bones matched by name). The real hero mesh keeps animating but is hidden, so every
+-- model moves with the selected hero's animations, and weapons stay attached to the hero's hand bones.
+local function heroMesh(pawn) return pawn.Mesh end
+
+local function ensureFollower(pawn)
+    local f = modelState.follower
+    if valid(f) and modelState.followerPawn == addr(pawn) then return f end
+    local cls = StaticFindObject("/Script/Engine.SkeletalMeshComponent")
+    f = pawn:AddComponentByClass(cls, true, { Translation = { X = 0, Y = 0, Z = 0 }, Rotation = { X = 0, Y = 0, Z = 0, W = 1 },
+        Scale3D = { X = 1, Y = 1, Z = 1 } }, false)
+    if not valid(f) then return nil end
+    f:K2_AttachToComponent(heroMesh(pawn), FName("None"), 2, 2, 2, false)   -- SnapToTarget for location/rotation/scale
+    modelState.follower, modelState.followerPawn = f, addr(pawn)
+    return f
+end
+
+function WEAR_MODEL(key)
+    local e = MODEL_ENTRIES[key]
+    local pawn = getPawn()
+    if not e or not pawn or not valid(e.mesh) then return end
+    local hero = heroMesh(pawn)
+    local f = ensureFollower(pawn)
+    if not f then toast("Couldn't create the model", 2); return end
+    f:SetSkeletalMeshAsset(e.mesh)
+    pcall(function()
+        local mats = e.mesh.Materials
+        for i = 1, #mats do
+            local mi = mats[i].MaterialInterface
+            if valid(mi) then f:SetMaterial(i - 1, mi) end
+        end
+    end)
+    f:SetLeaderPoseComponent(hero, true, false)
+    hero.VisibilityBasedAnimTickOption = 0      -- AlwaysTickPoseAndRefreshBones: keep animating while hidden
+    hero:SetVisibility(false, false)            -- hide the hero body only (not weapons / attachments)
+    f:SetVisibility(true, false)
+    modelState.wearing = e.key
+    toast("Now wearing: " .. e.label, 1.8)
+    log("model -> " .. e.key)
+end
+
+-- re-wear the chosen model after respawn / level change (new pawn = new hero mesh)
+function MODEL_KEEP(apply)
+    if not modelState.wearing then return false end
+    if apply then
+        modelState.follower = nil
+        local key = modelState.wearing
+        if not MODEL_ENTRIES[key] then LIST_MODELS() end
+        WEAR_MODEL(key)
+    end
+    return true
+end
+
+local function resetModel()
+    local pawn = getPawn()
+    if not pawn then return end
+    local f = modelState.follower
+    if valid(f) then pcall(function() f:SetVisibility(false, false); f:K2_DestroyComponent(f) end) end
+    modelState.follower = nil
+    heroMesh(pawn):SetVisibility(true, false)
+    modelState.wearing = nil
+    toast("Back to your hero", 1.6)
+end
+
+header("MODEL")
+action("Back To My Hero", resetModel)
+action("Wear Random Model", function()
+    local list = LIST_MODELS()
+    if #list > 0 then WEAR_MODEL(list[math.random(#list)].key) end
+end)
+action("Refresh Model List", function() if REFRESH_MODELS then REFRESH_MODELS() end; toast("Model list refreshed", 1.2) end)
+
+header("RUN")
+action("Next Level", function() cheat("player"):DepartLevel(FName("")); toast("Leaving level...", 2) end)
+slider("skiplevel", "Skip To Level", 2, 1, 8, 1, fmtInt, nil)
+action("Go To That Level", function()
+    local n = math.floor(byId.skiplevel.value)
+    cheat("gameplay"):SkipToLevel(n); toast("Skipping to level " .. n, 2)
+end)
+action("Teleport: Boss ", function() cheat("player"):Tele2Boss(); toast("To the boss!") end)
+action("Teleport: Exit ", function() cheat("player"):Tele2Exit(); toast("To the exit") end)
+action("Teleport: Shop ", function() cheat("player"):Tele2Shop(); toast("To the shop") end)
+action("Complete Landmark", function() cheat("gameplay"):CompleteLandmark(); toast("Landmark completed") end)
+action("End Run (extract)", function() cheat("gameplay"):StartExtraction(); toast("Extraction started", 2) end)
+action("Restart (die)", function() cheat("player"):KillSelf(); toast("Respawning...", 2) end)
+
 header("ACHIEVEMENTS")
 action("Check Achievements", function()
     local u, t = achievementStatus()
@@ -892,7 +1503,7 @@ end
 -- UE4SS Lua can't bind UMG delegates (OnClicked), so buttons are polled: IsPressed / IsHovered every
 -- POLL_MS while the menu is open; a press->release while hovered is a click.
 ---------------------------------------------------------------------------------------------------
-local TABS = { "PLAYER", "COMBAT", "FUN", "ACTIONS", "ACHIEVEMENTS", "SETTINGS" }
+local TABS = { "PLAYER", "COMBAT", "FUN", "MODEL", "ACTIONS", "RUN", "WEAPONS", "ITEMS", "MONSTERS", "ACHIEVEMENTS", "SETTINGS" }
 local tabItems = {}
 for _, t in ipairs(TABS) do tabItems[t] = {} end
 for _, it in ipairs(items) do
@@ -920,8 +1531,8 @@ local COL = {
 local VIS = { Visible = 0, Collapsed = 1, Hidden = 2, HitTestInvisible = 3, SelfHitTestInvisible = 4 }
 local HALIGN = { Fill = 0, Left = 1, Center = 2, Right = 3 }
 local VALIGN = { Fill = 0, Top = 1, Center = 2, Bottom = 3 }
-local TAB_TITLES = { PLAYER = "Player", COMBAT = "Combat", FUN = "Fun", ACTIONS = "Actions", ACHIEVEMENTS = "Achievements", SETTINGS = "Settings" }
-local TAB_ICONS = { PLAYER = "player", COMBAT = "combat", FUN = "fun", ACTIONS = "actions", ACHIEVEMENTS = "achievements", SETTINGS = "settings" }
+local TAB_TITLES = { PLAYER = "Player", COMBAT = "Combat", FUN = "Fun", ACTIONS = "Actions", MODEL = "Model", RUN = "Run", WEAPONS = "Weapons", ITEMS = "Items", MONSTERS = "Monsters", ACHIEVEMENTS = "Achievements", SETTINGS = "Settings" }
+local TAB_ICONS = { PLAYER = "player", COMBAT = "combat", FUN = "fun", ACTIONS = "actions", MODEL = "model", RUN = "run", WEAPONS = "weapons", ITEMS = "spawner", MONSTERS = "monsters", ACHIEVEMENTS = "achievements", SETTINGS = "settings" }
 local BAR_W = 84
 local ROW_W = 470   -- default row width: labels fill, controls line up on the right edge
 local MIN_W, MAX_W, MIN_H, MAX_H = 360, 1000, 150, 900
@@ -1148,15 +1759,23 @@ local function buildUI()
         local mt = textBlock(tree, 14, COL.title, nil, 8); mt:SetText(FText("-")); mt:SetJustification(1)
         row.minus = button(tree, mt, pad(6, 1, 6, 2), HALIGN.Center, "pill")
         addH(r, row.minus, 6)
-        local barBox = sizeBox(tree, BAR_W, 6)
+        local barBox = sizeBox(tree, BAR_W, 6)          -- the visible track (also used for hit geometry)
         local track = border(tree, COL.track, pad(0, 0, 0, 0), "pill")
         pcall(function() track:SetHorizontalAlignment(HALIGN.Left); track:SetVerticalAlignment(VALIGN.Fill) end)
         barBox:SetContent(track)
         row.fillBox = sizeBox(tree, BAR_W, 6)
         row.fillBox:SetContent(border(tree, COL.fill, pad(0, 0, 0, 0), "pill"))
         track:SetContent(row.fillBox)
-        row.bar = barBox
-        addH(r, barBox, 7)
+        local hitHolder = border(tree, COL.none, pad(0, 0, 0, 0))
+        pcall(function() hitHolder:SetVerticalAlignment(VALIGN.Center); hitHolder:SetHorizontalAlignment(HALIGN.Fill) end)
+        hitHolder:SetContent(barBox)
+        local hitBox = sizeBox(tree, BAR_W, 20)          -- taller invisible click area
+        hitBox:SetContent(hitHolder)
+        local barBtn = button(tree, hitBox, pad(0, 0, 0, 0), HALIGN.Fill, 4)
+        barBtn:SetBackgroundColor(COL.none)
+        row.bar, row.track = barBtn, barBox
+        addH(r, barBtn, 7)
+        clickable({ btn = barBtn, kind = "bar", index = i, color = function() return COL.none end })
         row.valueText = textBlock(tree, 13, COL.text, nil, 54); row.valueText:SetJustification(1)
         addH(r, row.valueText, 4)
         local pt = textBlock(tree, 14, COL.title, nil, 8); pt:SetText(FText("+")); pt:SetJustification(1)
@@ -1198,6 +1817,45 @@ local function buildUI()
             end
             return (h or p) and COL.runHover or COL.run
         end })
+    end
+
+    -- tile grids (Weapons / Items / Monsters). Tiles get their hover/press look from the button's own
+    -- state tints (no per-frame hover polling), so 100+ tiles stay cheap.
+    ui.grids, ui.gridBoxes, ui.dynGrids = {}, {}, {}
+    ui.tree = tree
+    for _, tabName in ipairs(TABS) do
+        local defs = GRIDS[tabName]
+        if defs then
+            local sec = vbox(tree)
+            for gi2, g in ipairs(defs) do
+                local ht = textBlock(tree, 13, COL.dim, nil, nil)
+                ht:SetText(FText(g[1]))
+                addV(sec, ht, gi2 == 1 and 10 or 14)
+                local wb = StaticConstructObject(C("/Script/UMG.WrapBox"), tree, uname("LortGrid"))
+                pcall(function() wb:SetInnerSlotPadding({ X = 6, Y = 6 }) end)
+                local wsize = sizeBox(tree, PANEL_SIZE.W, nil)
+                wsize:SetContent(wb)
+                ui.gridBoxes[#ui.gridBoxes + 1] = wsize
+                addV(sec, wsize, 6)
+                if g.dynamic then ui.dynGrids = ui.dynGrids or {}; ui.dynGrids[tabName] = wb end
+                for _, id in ipairs(g[2]) do
+                    local tt = textBlock(tree, 12, COL.text, nil, nil)
+                    tt:SetText(FText(prettyId(id)))
+                    local tb2 = button(tree, tt, pad(10, 6, 10, 6), HALIGN.Center, 8)
+                    local st = tb2.WidgetStyle
+                    st.Hovered.TintColor = slate(rgba(1.9, 1.9, 1.9, 1.9))
+                    st.Pressed.TintColor = slate(rgba(3.2, 3.2, 3.2, 3.2))
+                    tb2:SetBackgroundColor(rgba(1, 1, 1, 0.12))
+                    wb:AddChildToWrapBox(tb2)
+                    local onTile = g[3]
+                    clickable({ btn = tb2, kind = "tile", tab = tabName, id = id, run = function() onTile(id) end,
+                        noHover = true, color = function() return rgba(1, 1, 1, 0.12) end })
+                end
+            end
+            addV(rowsBox, sec, 4)
+            sec:SetVisibility(VIS.Collapsed)
+            ui.grids[tabName] = sec
+        end
     end
 
     -- footer: hint
@@ -1250,6 +1908,31 @@ local function buildUI()
     return true
 end
 
+function REFRESH_MODELS()
+    local wb = ui.dynGrids and ui.dynGrids.MODEL
+    if not valid(wb) or not valid(ui.tree) then return end
+    wb:ClearChildren()
+    local keep = {}
+    for _, c in ipairs(ui.clickables) do if not (c.kind == "tile" and c.tab == "MODEL") then keep[#keep + 1] = c end end
+    ui.clickables = keep
+    local list = LIST_MODELS()
+    for _, e in ipairs(list) do
+        local tt = textBlock(ui.tree, 12, COL.text, nil, nil)
+        tt:SetText(FText(e.label))
+        local tb2 = button(ui.tree, tt, pad(10, 6, 10, 6), HALIGN.Center, 8)
+        local st = tb2.WidgetStyle
+        st.Hovered.TintColor = slate(rgba(1.9, 1.9, 1.9, 1.9))
+        st.Pressed.TintColor = slate(rgba(3.2, 3.2, 3.2, 3.2))
+        tb2:SetBackgroundColor(e.hero and rgba(0.55, 0.85, 1, 0.22) or rgba(1, 1, 1, 0.12))
+        wb:AddChildToWrapBox(tb2)
+        local key = e.key
+        clickable({ btn = tb2, kind = "tile", tab = "MODEL", id = e.label, run = function() WEAR_MODEL(key) end,
+            noHover = true, color = function() return e.hero and rgba(0.55, 0.85, 1, 0.22) or rgba(1, 1, 1, 0.12) end })
+    end
+    log("model list: " .. #list .. " models")
+    if RENDER then RENDER() end
+end
+
 local function ensureUI()
     if valid(ui.widget) and valid(ui.panel) and valid(ui.toastText) then return true end
     local ok, res = safe("buildUI", buildUI)
@@ -1278,6 +1961,7 @@ function APPLY_SIZE()
     if not valid(ui.listSize) then return end
     ui.listSize:SetHeightOverride(PANEL_SIZE.H)
     for _, row in ipairs(ui.rows) do row.box:SetWidthOverride(PANEL_SIZE.W) end
+    for _, gb in ipairs(ui.gridBoxes or {}) do gb:SetWidthOverride(PANEL_SIZE.W) end
 end
 
 local function applyScale()
@@ -1309,12 +1993,17 @@ local function render()
             row.label:SetText(FText(lbl))
             row.label:SetColorAndOpacity(slate(ui.sel == i and COL.sel or COL.text))
             local isSlider, isToggle = it.kind == "slider", it.kind == "toggle"
-            local isPill = it.kind == "action" or it.kind == "keybind"
+            local isPill = it.kind == "action" or it.kind == "keybind" or it.picker
             local sv = isSlider and VIS.Visible or VIS.Collapsed
-            row.minus:SetVisibility(sv); row.plus:SetVisibility(sv); row.bar:SetVisibility(sv); row.valueText:SetVisibility(sv)
+            row.minus:SetVisibility(sv); row.plus:SetVisibility(sv); row.valueText:SetVisibility(sv)
+            row.bar:SetVisibility((isSlider and not it.picker) and VIS.Visible or VIS.Collapsed)
             row.switchBox:SetVisibility(isToggle and VIS.Visible or VIS.Collapsed)
             row.pill:SetVisibility(isPill and VIS.Visible or VIS.Collapsed)
             local vt, vc = valueText(it)
+            if it.picker then
+                row.pillText:SetText(FText("GIVE"))
+                row.pillText:SetColorAndOpacity(slate(WHITE))
+            end
             if isSlider then
                 row.valueText:SetText(FText(vt))
                 row.valueText:SetColorAndOpacity(slate(vc))
@@ -1323,7 +2012,7 @@ local function render()
                 row.fillBox:SetWidthOverride(math.max(6, BAR_W * frac))
             elseif isToggle then
                 pcall(function() row.switchSlot:SetHorizontalAlignment(eff(it) and HALIGN.Right or HALIGN.Left) end)
-            elseif isPill then
+            elseif isPill and not it.picker then
                 row.pillText:SetText(FText(vt))
                 row.pillText:SetColorAndOpacity(slate(vc))
             end
@@ -1337,21 +2026,28 @@ local function render()
     local st = "drag top: move  -  drag edges / corners: resize  -  wheel scroll  -  " .. MENU_KEY .. " close"
     if chaos.on then st = "CHAOS: " .. (chaos.active or "waiting...") .. "   " .. st end
     ui.status:SetText(FText(st))
+    for tabName, sec in pairs(ui.grids or {}) do
+        sec:SetVisibility(tabName == TABS[ui.tab] and VIS.Visible or VIS.Collapsed)
+    end
     -- only poll what's visible: hidden rows/controls are skipped (big win for drag smoothness)
     ui.active = {}
     for _, c in ipairs(ui.clickables) do
         c.lastColor = nil   -- force recolour
         local keep = true
-        if c.index and (c.kind == "row" or c.kind == "minus" or c.kind == "plus" or c.kind == "value") then
+        if c.index and (c.kind == "row" or c.kind == "minus" or c.kind == "plus" or c.kind == "value" or c.kind == "bar") then
             local it = ui.rows[c.index] and ui.rows[c.index].item
             if not it then keep = false
             elseif c.kind == "minus" or c.kind == "plus" then keep = it.kind == "slider"
+            elseif c.kind == "bar" then keep = it.kind == "slider" and not it.picker
             elseif c.part == "switch" then keep = it.kind == "toggle"
-            elseif c.part == "pill" then keep = it.kind == "action" or it.kind == "keybind" end
+            elseif c.part == "pill" then keep = it.kind == "action" or it.kind == "keybind" or it.picker == true end
         end
+        if c.kind == "tile" then keep = (c.tab == TABS[ui.tab]) end
         if keep then ui.active[#ui.active + 1] = c end
     end
 end
+
+RENDER = render
 
 toast = function(text, seconds)
     if not ensureUI() then return end
@@ -1425,6 +2121,7 @@ end
 
 local function activate(it)
     if not it then return end
+    if it.picker then safe("give", it.give); return end
     if it.kind == "keybind" then
         ui.listen = { item = it, armed = false, prev = {} }
         local what = (it.target == "menu") and "the menu" or it.target.label
@@ -1448,7 +2145,7 @@ local function scrollToSel()
     if valid(ui.scroll) and row then pcall(function() ui.scroll:ScrollWidgetIntoView(row.box, false, 0, 4) end) end
 end
 local function moveSel(d) local n = #curItems(); if n > 0 then ui.sel = ((ui.sel - 1 + d) % n) + 1 end; scrollToSel() end
-local function moveTab(d) ui.tab = ((ui.tab - 1 + d) % #TABS) + 1; ui.sel = 1; if valid(ui.scroll) then ui.scroll:ScrollToStart() end end
+local function moveTab(d) ui.tab = ((ui.tab - 1 + d) % #TABS) + 1; ui.sel = 1; if TABS[ui.tab] == "MODEL" then safe("models", REFRESH_MODELS) end; if valid(ui.scroll) then ui.scroll:ScrollToStart() end end
 
 ---------------------------------------------------------------------------------------------------
 -- mouse polling
@@ -1457,13 +2154,14 @@ local POLL_MS = 33
 local function sameColor(a, b) return b and near(a.R, b.R) and near(a.G, b.G) and near(a.B, b.B) and near(a.A, b.A) end
 
 local function onClick(c)
-    if c.kind == "tab" then ui.tab = c.index; ui.sel = 1; if valid(ui.scroll) then ui.scroll:ScrollToStart() end
+    if c.kind == "tile" then safe("tile " .. c.id, c.run); return end
+    if c.kind == "tab" then ui.tab = c.index; ui.sel = 1; if TABS[ui.tab] == "MODEL" then safe("models", REFRESH_MODELS) end; if valid(ui.scroll) then ui.scroll:ScrollToStart() end
     elseif c.kind == "close" then setOpen(false); return
     elseif c.kind == "row" then
         ui.sel = c.index
         local it = curItems()[c.index]
         if it and it.kind ~= "slider" then activate(it) end
-    elseif c.kind == "value" then ui.sel = c.index; local it = curItems()[c.index]; if it and it.kind ~= "slider" then activate(it) end
+    elseif c.kind == "value" then ui.sel = c.index; local it = curItems()[c.index]; if it and (it.kind ~= "slider" or (it.picker and c.part == "pill")) then activate(it) end
     elseif c.kind == "minus" then ui.sel = c.index; change(curItems()[c.index], -1)
     elseif c.kind == "plus" then ui.sel = c.index; change(curItems()[c.index], 1)
     end
@@ -1493,10 +2191,11 @@ local function pollMouse()
     if pc and not pc.bShowMouseCursor then pc.bShowMouseCursor = true end
     local now = os.clock()
     local list = ui.active or ui.clickables
-    if ui.dragging then list = { ui.dragging.c } elseif ui.resizing then list = { ui.resizing.c } end
+    if ui.dragging then list = { ui.dragging.c } elseif ui.resizing then list = { ui.resizing.c }
+    elseif ui.barDrag then list = { ui.barDrag.c } end
     for _, c in ipairs(list) do
         local p = c.btn:IsPressed() == true
-        local h = (ui.dragging or ui.resizing) and true or hovered(c.btn)
+        local h = (ui.dragging or ui.resizing or c.noHover) and true or hovered(c.btn)
         -- colour
         local col = c.color(p, h)
         if not sameColor(col, c.lastColor) then c.btn:SetBackgroundColor(col); c.lastColor = col end
@@ -1527,6 +2226,38 @@ local function pollMouse()
             elseif not p and ui.resizing and ui.resizing.c == c then
                 ui.resizing = nil
                 SAVE_ALL()
+            end
+        elseif c.kind == "bar" then
+            if p and (not ui.barDrag or ui.barDrag.c == c) then
+                ui.barDrag = ui.barDrag or { c = c }
+                local row = ui.rows[c.index]
+                local it = row and row.item
+                if it and it.kind == "slider" then
+                    local frac
+                    local okg = pcall(function()
+                        local sbl = refs.sbl
+                        if not valid(sbl) then sbl = C("/Script/UMG.Default__SlateBlueprintLibrary"); refs.sbl = sbl end
+                        local _, wll = libs()
+                        local first = not refs.barChecked
+                        if first then log("bar: geometry") end
+                        local g = row.track:GetCachedGeometry()
+                        if first then log("bar: mouse") end
+                        local m = wll:GetMousePositionOnPlatform()
+                        if first then log("bar: AbsoluteToLocal") end
+                        local loc = sbl:AbsoluteToLocal(g, m)
+                        local size = sbl:GetLocalSize(g)
+                        if first then refs.barChecked = true; log(string.format("bar: ok local=%.1f size=%.1f", loc.X, size.X)) end
+                        if size.X > 1 then frac = clamp(loc.X / size.X, 0, 1) end
+                    end)
+                    if okg and frac then
+                        local v = it.lo + frac * (it.hi - it.lo)
+                        v = clamp(math.floor(v / it.step + 0.5) * it.step, it.lo, it.hi)
+                        if not near(v, it.value) then it.value = v; ui.sel = c.index; render() end
+                    end
+                end
+            elseif not p and ui.barDrag and ui.barDrag.c == c then
+                ui.barDrag = nil
+                saveAll()
             end
         elseif c.kind == "drag" then
             if p and (not ui.dragging or ui.dragging.c == c) then
@@ -1749,6 +2480,7 @@ local function tick()
         enemyScaled = {}
         chaos.lastTime = nil
         log("new pawn " .. pawn:GetFullName())
+        if MODEL_KEEP and MODEL_KEEP() then later(1500, function() MODEL_KEEP(true) end) end
     end
     chaosTick(TICK_MS / 1000)
     for _, it in ipairs(items) do
@@ -1772,9 +2504,10 @@ gameLoop(FRAME_MS, function()
         if of then of:close(); if not ui.open then safe("open.flag", setOpen, true) end end
     end
     if frames % 2 == 1 or ui.listen then safe("keys", pollKeys) end
-    if ui.open and (ui.dragging or ui.resizing or frames % 2 == 0) then safe("mouse", pollMouse) end
+    if ui.open and (ui.dragging or ui.resizing or ui.barDrag or frames % 2 == 0) then safe("mouse", pollMouse) end
     safe("fly", flyStep, FRAME_MS)
     safe("anim", animStep)
+    if frames % 2 == 1 then safe("projectiles", projectileStep) end
     tickAcc = tickAcc + FRAME_MS
     if tickAcc >= TICK_MS then tickAcc = 0; safe("tick", tick) end
 end)

@@ -12,6 +12,13 @@ It works with **mouse and keyboard**, and you can **move it and resize it like a
 
 **Requires** UE4SS with the LORT layout fix: [lort-ue4ss](https://github.com/9vsv6/lort-ue4ss).
 
+> ⚠️ **Co-op: the menu only works when YOU are the host.**
+> In LORT the host's game is the server and has the final say on health, damage, cooldowns, items, gold,
+> spawning and so on. The developer cheats the menu uses also run on the host only. If you **join** a friend's
+> game, the options won't do anything, because the host's game overwrites them. To use the menu together, **the
+> host installs the mod**. The menu doesn't try to force changes into someone else's server.
+> Solo play always works.
+
 ## Install
 1. Install UE4SS and the layout fix by following [lort-ue4ss](https://github.com/9vsv6/lort-ue4ss).
 2. Copy the `LortModMenu` folder into `...\LORT\bw\Binaries\Win64\ue4ss\Mods\`.
@@ -25,7 +32,7 @@ It works with **mouse and keyboard**, and you can **move it and resize it like a
 **Mouse**
 - Click a section in the left sidebar.
 - Click a switch to toggle it, and click a RUN pill to run an action.
-- Use **−** and **+** on sliders. Hold them to repeat.
+- **Click or drag on a slider's bar** to set its value, or use **−** and **+** (hold them to repeat).
 - **Drag the top edge or a title** to move the window.
 - **Drag any corner or edge** to resize it. The cursor shows resize arrows; wider makes the rows wider, and
   taller shows more rows.
@@ -66,8 +73,12 @@ The cursor appears and camera look is paused while the menu is open. Position an
 - Crit Chance
 - Crit Damage
 - **Cooldown Reduction** 0–100% (100% = no cooldowns for skills and weapon alt-fires)
+- **Projectile Size** ×1–5: your arrows, orbs, daggers, bombs and mines get bigger, with bigger hitboxes and
+  explosions
+- **Melee Range** ×1–4: your swings hit a bigger area, further out (enemy attacks unchanged)
 
 **Fun**
+- **Custom FOV** + FOV Angle 60–150
 - Game Speed ×0.1–3
 - Player Size
 - Gravity
@@ -75,8 +86,26 @@ The cursor appears and camera look is paused while the menu is open. Position an
 - Enemy Size
 - **Noclip**: fly through walls (Space and Ctrl move you up and down), with a Fly Speed slider
 - Enemies Ignore Me
+- **Big Head Mode** with a Head Size slider (your hero)
 - **CHAOS MODE**: a random effect every few seconds: slow-mo, turbo, giant, tiny, moon gravity, giant
   enemies, shrink ray, bounce house, sonic, berserk
+
+**Model**: wear any character model in the game
+- A grid of every character model that's loaded: all heroes (Wizard, Warrior, Ranger, Rogue, Paladin), camp NPCs,
+  and the enemies near you during a run. Click one to wear it.
+- The model copies your selected hero's animations (leader pose), so it walks, attacks and uses skills like your
+  hero. Your weapons stay in your hands.
+- It stays on after you respawn or change level. Use **Back To My Hero** to undo, or **Wear Random Model**.
+
+**Run**
+- Next Level, Skip To Level 1–8, Teleport to Boss / Exit / Shop, Complete Landmark, End Run (extract),
+  Restart (die).
+
+**Weapons, Items, Monsters**: spawners with clickable tile grids
+- **Weapons:** all 22 weapons (click to get one), Item Level 1–30, Give All, Random Weapon.
+- **Items:** all 105 powerups plus keys, toys, quest items and trash; Random Powerup, 5 Random, Every Powerup.
+- **Monsters:** all 56 enemies and bosses (click to spawn near you), Spawn Count 1–20, Spawn Random Boss,
+  Kill Everything.
 
 **Actions**
 - +1000 Gold, +500 Rune Juice
@@ -119,6 +148,17 @@ Everything goes through the game's own systems:
   which are still in the shipping game (`BWPlayerCheats`, `BWGameplayCheats`, `BWAICheats`,
   `BWChallengeCheats`).
 - **NUKE / Kill All** use the game's own damage function (`ApplyRadialDamage` / `ApplyDamage`).
+- **Spawners**: item IDs are the row names of the game's DataTables (`PlayerItems_Equipment`, `PowerupsTable`,
+  `NPCTable`). They were read from memory with `tools/rowdump.py`, and given with the dev cheats
+  `AddItemToInventory`, `GivePowerup` and `Spawn`.
+- **Model**: a second `SkeletalMeshComponent` is added with `AddComponentByClass` and attached to the hero mesh,
+  using `SetLeaderPoseComponent(hero)`. The hero mesh is hidden but keeps ticking
+  (`VisibilityBasedAnimTickOption = AlwaysTickPoseAndRefreshBones`).
+- **Big Head** retargets a `FAnimNode_ModifyBone` node in `ABP_Player` to the `Head` bone, then bounces the mesh
+  LOD so the anim graph re-caches its bone references.
+- **Attack size**: player projectiles (`ABWProjectile`, instigator = you) get an actor scale and a bigger
+  `DamageRadius`. Player melee notifies (`BWAnimNotify_MeleeAttack`) get their `FBWDamageShape` scaled.
+- **FOV** uses `PlayerController:FOV(angle)`.
 - **Noclip** switches the character to flying movement and turns off its collision.
 - **Unlock persistence.** `CompleteAllChallenges` fires the Steam achievements, but the game never writes the
   completion into its profile save, so the unlocks reset. The save is JSON
@@ -150,6 +190,13 @@ Everything goes through the game's own systems:
 every tweak and logs the results to `LortModMenu\menu.log`.
 
 ## Notes
+- **Host only in co-op** (see the top of this page).
+- **Less-tested features:**
+  - Big Head, Run Control and the Monster spawner were built against the game's code but have had little
+    play-testing;
+  - non-hero models only animate where their bone names match the hero skeleton.
+
+  Please open an issue if something doesn't work.
 - Use it in single-player, or in private co-op with friends who agree to it. Not for public lobbies.
 - Pick hotkeys the game doesn't use (F2–F12, numpad, Home/End, side mouse buttons). A hotkey still does its
   normal in-game action too.
