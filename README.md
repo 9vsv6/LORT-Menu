@@ -3,8 +3,12 @@
 An in-game mod menu for **LORT**, with gameplay tweaks, fun extras, hotkeys and an achievement unlocker. It's a
 UE4SS Lua mod.
 
-The menu is a real in-game window built from UMG widgets in LORT's own font. It has tabs, and it works with
-**mouse and keyboard**: you can **drag** it and **resize** it.
+The menu is a real in-game **frosted-glass window** built from UMG widgets:
+- a see-through, blurred, rounded panel with an icon sidebar for the sections;
+- iPhone-style toggle switches, slider bars and pill buttons;
+- LORT's own font for the titles.
+
+It works with **mouse and keyboard**, and you can **move it and resize it like a Windows window**.
 
 **Requires** UE4SS with the LORT layout fix: [lort-ue4ss](https://github.com/9vsv6/lort-ue4ss).
 
@@ -19,21 +23,23 @@ The menu is a real in-game window built from UMG widgets in LORT's own font. It 
 
 ## Using the menu
 **Mouse**
-- Click a tab.
-- Click a toggle or its ON/OFF pill to flip it, and click an action or its RUN pill to run it.
-- Use **<** and **>** on sliders. Hold them to repeat.
-- **Drag the title bar** to move the window.
-- **Drag the // grip** in the bottom-right corner to resize it.
-- Scroll long tabs with the **mouse wheel**.
-- **X** closes the menu.
+- Click a section in the left sidebar.
+- Click a switch to toggle it, and click a RUN pill to run an action.
+- Use **−** and **+** on sliders. Hold them to repeat.
+- **Drag the top edge or a title** to move the window.
+- **Drag any corner or edge** to resize it. The cursor shows resize arrows; wider makes the rows wider, and
+  taller shows more rows.
+- Scroll long sections with the **mouse wheel**.
+- **X** (top right) closes the menu.
 
-The cursor appears and camera look is paused while the menu is open.
+The cursor appears and camera look is paused while the menu is open. Position and size are saved, and
+**Settings → Reset Menu Position & Size** brings the window back.
 
 **Keyboard**
 
 | Key | Action |
 |---|---|
-| F1 / Insert | Open or close (the menu key can be changed in Settings) |
+| F1 / Insert | Open or close, anywhere including the main menu (the menu key can be changed in Settings) |
 | Up / Down | Select |
 | Left / Right | Change a value (hold to repeat) |
 | PgUp / PgDn | Switch tab |
@@ -91,7 +97,6 @@ The cursor appears and camera look is paused while the menu is open.
 
 **Settings**
 - Menu Key: rebind F1 to any key.
-- Menu Size: 50–200%. You can also drag the // grip.
 - Reset Menu Position & Size.
 - **A hotkey for every feature.** Each toggle and action has its own row (`Hotkey: God Mode`). Click a row and
   press a key to bind it. Esc cancels, and Backspace or Delete clears it. Hotkeys work with the menu open or
@@ -124,11 +129,22 @@ Everything goes through the game's own systems:
 
   The game rewrites that file from memory while it runs, so the menu records what to add and patches the save
   on the next launch, before the game reads it. A copy of the old save is kept in the mod folder.
+- **The look**: a `BackgroundBlur` widget under a translucent rounded `Border`. Rounded corners come from editing
+  each brush in place (`DrawAs = RoundedBox` with corner radii). The sidebar icons are white PNGs in
+  `LortModMenu/icons`, drawn with `tools/make_icons.py` and loaded at runtime with `ImportFileAsTexture2D`.
+- **The window frame** is an `Overlay` with invisible grab areas on every edge and corner (`SetCursor` gives
+  them Windows resize cursors). Resizing changes the row width and list height, and the left and top edges
+  also move the window.
 - **The menu UI** is UMG widgets created from Lua. UE4SS Lua can't bind UMG click delegates, so buttons are
   polled every frame (`IsPressed`), and a press followed by a release counts as a click.
 - **Threading.** Everything runs from one `LoopInGameThreadWithDelay` loop on the game thread. Running Lua from
   UE4SS's async threads (`LoopAsync`, keybind callbacks) at the same time as the game thread corrupted the Lua
   state and crashed UE4SS. Keys are read with `PlayerController:IsInputKeyDown` for the same reason.
+  - **Exception: the menu key and key capture** use UE4SS `RegisterKeyBind`. `IsInputKeyDown` can't see keys
+    while the game's own UI owns input (the main menu). Those callbacks only queue a function onto the game
+    thread, once per key press.
+  - When the menu opens, `SetFocusToGameViewport` keeps the keyboard with the game, so keys still work while the
+    mouse uses the menu.
 
 **Self-test:** create an empty file `LortModMenu\selftest.flag`. On the next spawn, the menu changes and resets
 every tweak and logs the results to `LortModMenu\menu.log`.

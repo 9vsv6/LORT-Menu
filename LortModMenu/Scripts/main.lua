@@ -804,7 +804,7 @@ for _, it in ipairs(items) do
 end
 currentTab = "SETTINGS"
 add({ kind = "keybind", label = "Menu Key", target = "menu" })
-slider("menusize", "Menu Size", 1, 0.5, 2, 0.05, function(v) return string.format("%d%%", math.floor(v * 100 + 0.5)) end, nil)
+slider("menusize", "Menu Size", 1, 0.5, 2, 0.05, function(v) return string.format("%d%%", math.floor(v * 100 + 0.5)) end, nil).hidden = true   -- zoom kept internally; resize from corners instead
 action("Reset Menu Position & Size", function() RESET_PANEL(); toast("Menu reset") end)
 action("Clear All Hotkeys", function() HOTKEYS = {}; SAVE_ALL(); toast("All hotkeys cleared") end)
 -- one row per bindable feature: click it, press a key (Esc cancel, Backspace / Del clear)
@@ -816,6 +816,7 @@ end
 -- settings persistence
 ---------------------------------------------------------------------------------------------------
 PANEL_POS = { X = 60, Y = 90 }
+PANEL_SIZE = { W = 470, H = 390 }   -- row width and list height (window-style resize)
 local function saveSettings()
     local f = io.open(SETTINGS_FILE, "w")
     if not f then return end
@@ -835,6 +836,7 @@ local function loadSettings()
         if k == "menukey" then MENU_KEY = v end
         if k and k:sub(1, 3) == "hk_" and hkItems[k:sub(4)] then HOTKEYS[k:sub(4)] = v end
         if k == "panelX" or k == "panelY" then local n = tonumber(v); if n then PANEL_POS[k == "panelX" and "X" or "Y"] = n end end
+        if k == "panelW" or k == "panelH" then local n = tonumber(v); if n then PANEL_SIZE[k == "panelW" and "W" or "H"] = n end end
         local it = k and byId[k]
         if it then
             if it.kind == "toggle" then it.value = (v == "true")
@@ -894,7 +896,7 @@ local TABS = { "PLAYER", "COMBAT", "FUN", "ACTIONS", "ACHIEVEMENTS", "SETTINGS" 
 local tabItems = {}
 for _, t in ipairs(TABS) do tabItems[t] = {} end
 for _, it in ipairs(items) do
-    if it.kind ~= "header" and it.tab and tabItems[it.tab] then table.insert(tabItems[it.tab], it) end
+    if it.kind ~= "header" and not it.hidden and it.tab and tabItems[it.tab] then table.insert(tabItems[it.tab], it) end
 end
 local ROWS = 1
 for _, t in ipairs(TABS) do ROWS = math.max(ROWS, #tabItems[t]) end
@@ -902,19 +904,27 @@ local MAX_LIST_HEIGHT = 390   -- ~13 rows, the rest scrolls (mouse wheel / keybo
 
 local ui = { open = false, tab = 1, sel = 1, rows = {}, clickables = {}, pos = PANEL_POS }
 local function rgba(r, g, b, a) return { R = r, G = g, B = b, A = a or 1 } end
+-- Frosted-glass theme: everything is white at different opacities over a blurred background
 local COL = {
-    title = rgba(0.71, 1.0, 0.23), text = rgba(0.88, 0.88, 0.9), dim = rgba(0.55, 0.56, 0.6),
-    dark = rgba(0.05, 0.06, 0.08), changed = rgba(0.45, 0.85, 1.0), chaos = rgba(1.0, 0.62, 0.18),
-    panel = rgba(0.03, 0.035, 0.05, 0.94), bar = rgba(0.07, 0.08, 0.11, 1), barHover = rgba(0.1, 0.11, 0.15, 1),
-    tab = rgba(0.10, 0.11, 0.15, 1), tabHover = rgba(0.18, 0.2, 0.26, 1), tabOn = rgba(0.71, 1.0, 0.23, 1),
-    row = rgba(0, 0, 0, 0), rowHover = rgba(1, 1, 1, 0.07), rowSel = rgba(0.71, 1.0, 0.23, 0.13),
-    btn = rgba(0.14, 0.15, 0.2, 1), btnHover = rgba(0.26, 0.28, 0.35, 1), press = rgba(0.71, 1.0, 0.23, 1),
-    on = rgba(0.18, 0.56, 0.23, 1), off = rgba(0.2, 0.2, 0.23, 1), val = rgba(0.10, 0.11, 0.15, 1),
-    run = rgba(0.62, 0.38, 0.1, 1), close = rgba(0.75, 0.15, 0.15, 1),
+    title = rgba(1, 1, 1), text = rgba(1, 1, 1), dim = rgba(1, 1, 1, 0.68), dark = rgba(0.09, 0.15, 0.22),
+    sel = rgba(1, 0.93, 0.6), changed = rgba(0.6, 0.92, 1.0), chaos = rgba(1.0, 0.68, 0.25),
+    glass = rgba(0.06, 0.08, 0.11, 0.42), outline = rgba(1, 1, 1, 0.38), side = rgba(0, 0, 0, 0.25),
+    none = rgba(1, 1, 1, 0), navHover = rgba(1, 1, 1, 0.14), navOn = rgba(1, 1, 1, 0.96),
+    rowSel = rgba(1, 1, 1, 0.16), rowHover = rgba(1, 1, 1, 0.09),
+    pm = rgba(1, 1, 1, 0.24), pmHover = rgba(1, 1, 1, 0.38), pmPress = rgba(1, 1, 1, 0.7),
+    on = rgba(0.2, 0.78, 0.35, 1), off = rgba(1, 1, 1, 0.26),
+    run = rgba(1.0, 0.42, 0.36, 0.95), runHover = rgba(1.0, 0.56, 0.45, 1), key = rgba(1, 1, 1, 0.22),
+    listen = rgba(1.0, 0.68, 0.25, 0.95), close = rgba(1, 0.33, 0.33, 0.92), closeHover = rgba(1, 0.48, 0.48, 1),
+    track = rgba(1, 1, 1, 0.26), fill = rgba(1, 1, 1, 0.95),
 }
 local VIS = { Visible = 0, Collapsed = 1, Hidden = 2, HitTestInvisible = 3, SelfHitTestInvisible = 4 }
 local HALIGN = { Fill = 0, Left = 1, Center = 2, Right = 3 }
 local VALIGN = { Fill = 0, Top = 1, Center = 2, Bottom = 3 }
+local TAB_TITLES = { PLAYER = "Player", COMBAT = "Combat", FUN = "Fun", ACTIONS = "Actions", ACHIEVEMENTS = "Achievements", SETTINGS = "Settings" }
+local TAB_ICONS = { PLAYER = "player", COMBAT = "combat", FUN = "fun", ACTIONS = "actions", ACHIEVEMENTS = "achievements", SETTINGS = "settings" }
+local BAR_W = 84
+local ROW_W = 470   -- default row width: labels fill, controls line up on the right edge
+local MIN_W, MAX_W, MIN_H, MAX_H = 360, 1000, 150, 900
 
 local function C(path) return StaticFindObject(path) end
 local function slate(c) return { SpecifiedColor = c, ColorUseRule = 0 } end
@@ -924,6 +934,26 @@ local fontObj
 local nameSeq = 0
 local function uname(base) nameSeq = nameSeq + 1; return FName(base .. "_" .. nameSeq) end
 
+-- Rounded corners: edit the brush in place (never pass brush/style structs to a setter: that crashes UE4SS here).
+-- radius = number (fixed radius) or "pill" (half-height); corners = {tl,tr,br,bl} optional.
+local function roundBrush(brush, radius, corners, outline)
+    brush.DrawAs = 4                                   -- ESlateBrushDrawType::RoundedBox
+    local o = brush.OutlineSettings
+    if radius == "pill" then
+        o.RoundingType = 1                             -- HalfHeightRadius
+    else
+        o.RoundingType = 0                             -- FixedRadius
+        local c = corners or { radius, radius, radius, radius }
+        o.CornerRadii = { X = c[1], Y = c[2], Z = c[3], W = c[4] }
+    end
+    if outline then
+        o.Width = outline.width
+        o.Color = slate(outline.color)
+    else
+        o.Width = 0
+    end
+end
+
 local function textBlock(tree, size, color, font, minW)
     local t = StaticConstructObject(C("/Script/UMG.TextBlock"), tree, uname("LortTxt"))
     local f = t.Font
@@ -932,38 +962,75 @@ local function textBlock(tree, size, color, font, minW)
     t:SetFont(f)
     t:SetColorAndOpacity(slate(color))
     t:SetShadowOffset({ X = 1, Y = 1 })
-    t:SetShadowColorAndOpacity({ R = 0, G = 0, B = 0, A = 0.7 })
+    t:SetShadowColorAndOpacity({ R = 0, G = 0, B = 0, A = 0.6 })
     if minW then t:SetMinDesiredWidth(minW) end
     return t
 end
 
--- flat button: all state brushes tinted white, colour driven by SetBackgroundColor from the poll loop
-local function button(tree, content, pad, halign)
+-- flat rounded button: state brushes tinted white, colour driven by SetBackgroundColor from the poll loop
+local function button(tree, content, pad, halign, radius)
     local b = StaticConstructObject(C("/Script/UMG.Button"), tree, uname("LortBtn"))
     local st = b.WidgetStyle
-    for _, k in ipairs({ "Normal", "Hovered", "Pressed" }) do st[k].TintColor = slate(WHITE) end
+    for _, k in ipairs({ "Normal", "Hovered", "Pressed" }) do
+        st[k].TintColor = slate(WHITE)
+        roundBrush(st[k], radius or 9)
+    end
     st.NormalPadding = pad
     st.PressedPadding = pad
     -- NOTE: don't call b:SetStyle(st): passing FButtonStyle through UE4SS hard-crashes LORT.
-    -- The edits above go straight into b.WidgetStyle, which Slate reads when the widget is first built.
-    b.IsFocusable = false   -- never take keyboard focus (Enter/Space must stay with the game)
+    b.IsFocusable = false
     local slot = b:SetContent(content)
     pcall(function() slot:SetHorizontalAlignment(halign or HALIGN.Left); slot:SetVerticalAlignment(VALIGN.Center) end)
-    return b
+    return b, slot
 end
 
 local function hbox(tree) return StaticConstructObject(C("/Script/UMG.HorizontalBox"), tree, uname("LortHB")) end
 local function vbox(tree) return StaticConstructObject(C("/Script/UMG.VerticalBox"), tree, uname("LortVB")) end
-local function border(tree, color, pad)
+local function border(tree, color, pad, radius, corners, outline)
     local b = StaticConstructObject(C("/Script/UMG.Border"), tree, uname("LortBorder"))
+    if radius then roundBrush(b.Background, radius, corners, outline) end
     b:SetBrushColor(color)
     b:SetPadding(pad)
     return b
 end
-local function addH(box, w, padL) local s = box:AddChildToHorizontalBox(w); if padL then pcall(function() s:SetPadding({ Left = padL, Top = 0, Right = 0, Bottom = 0 }) end) end; return s end
-local function addV(box, w, padT) local s = box:AddChildToVerticalBox(w); if padT then pcall(function() s:SetPadding({ Left = 0, Top = padT, Right = 0, Bottom = 0 }) end) end; return s end
+local function sizeBox(tree, w, h)
+    local s = StaticConstructObject(C("/Script/UMG.SizeBox"), tree, uname("LortSize"))
+    if w then s:SetWidthOverride(w) end
+    if h then s:SetHeightOverride(h) end
+    return s
+end
+local function pad(l, t, r, b) return { Left = l, Top = t, Right = r, Bottom = b } end
+local function addH(box, w, padL, valign)
+    local s = box:AddChildToHorizontalBox(w)
+    pcall(function()
+        if padL then s:SetPadding(pad(padL, 0, 0, 0)) end
+        s:SetVerticalAlignment(valign or VALIGN.Center)
+    end)
+    return s
+end
+local function addV(box, w, padT) local s = box:AddChildToVerticalBox(w); if padT then pcall(function() s:SetPadding(pad(0, padT, 0, 0)) end) end; return s end
 
 local function clickable(c) c.lastColor = nil; c.wasPressed = false; table.insert(ui.clickables, c); return c end
+
+-- icons: white PNGs in <mod>/icons, loaded at runtime with ImportFileAsTexture2D
+local function absModDir()
+    if MOD_DIR:match("^%a:") then return MOD_DIR end
+    local p = io.popen("cd")
+    local cwd = p and p:read("*l") or ""
+    if p then p:close() end
+    return cwd .. "\\" .. MOD_DIR
+end
+local function iconTexture(name)
+    refs.icons = refs.icons or {}
+    local t = refs.icons[name]
+    if valid(t) then return t end
+    local kr = C("/Script/Engine.Default__KismetRenderingLibrary")
+    local ctx = getPC() or FindFirstOf("GameInstance")
+    local path = (absModDir() .. "icons\\" .. name .. ".png"):gsub("/", "\\")
+    local ok, tex = pcall(function() return kr:ImportFileAsTexture2D(ctx, path) end)
+    if ok and valid(tex) then refs.icons[name] = tex; return tex end
+    log("icon load failed: " .. path)
+end
 
 local function buildUI()
     local gi = FindFirstOf("GameInstance")
@@ -977,124 +1044,209 @@ local function buildUI()
     local canvas = StaticConstructObject(C("/Script/UMG.CanvasPanel"), tree, uname("LortCanvas"))
     tree.RootWidget = canvas
 
-    local panel = border(tree, COL.panel, { Left = 0, Top = 0, Right = 0, Bottom = 0 })
-    local pslot = canvas:AddChildToCanvas(panel)
+    -- frosted glass: background blur + translucent white tint + thin outline, all rounded
+    local blur = StaticConstructObject(C("/Script/UMG.BackgroundBlur"), tree, uname("LortBlur"))
+    safe("blur strength", function() blur.BlurStrength = 14; blur:SetBlurStrength(14) end)
+    safe("blur corners", function() blur:SetCornerRadius({ X = 16, Y = 16, Z = 16, W = 16 }) end)
+    safe("blur fallback", function()   -- used when the engine forces low-quality blur: smoky tint instead of nothing
+        local fb = blur.LowQualityFallbackBrush
+        roundBrush(fb, 16)
+        fb.TintColor = slate(rgba(0.05, 0.07, 0.1, 0.55))
+    end)
+    safe("blur cvars", function()
+        local ks = C("/Script/Engine.Default__KismetSystemLibrary")
+        local ctx = getPC() or gi
+        local lq = ks:GetConsoleVariableIntValue("Slate.ForceBackgroundBlurLowQuality")
+        log(string.format("blur: strength=%.1f ForceBackgroundBlurLowQuality=%s", blur.BlurStrength, tostring(lq)))
+        if lq and lq ~= 0 then
+            ks:ExecuteConsoleCommand(ctx, "Slate.ForceBackgroundBlurLowQuality 0", getPC())
+            log("blur: forced low quality off -> " .. tostring(ks:GetConsoleVariableIntValue("Slate.ForceBackgroundBlurLowQuality")))
+        end
+    end)
+    local glass = border(tree, COL.glass, pad(0, 0, 0, 0), 16, nil, { width = 1, color = COL.outline })
+    local frame = StaticConstructObject(C("/Script/UMG.Overlay"), tree, uname("LortFrame"))
+    blur:SetContent(frame)
+    local gs = frame:AddChildToOverlay(glass)
+    pcall(function() gs:SetHorizontalAlignment(HALIGN.Fill); gs:SetVerticalAlignment(VALIGN.Fill) end)
+    ui.frame = frame
+    local pslot = canvas:AddChildToCanvas(blur)
     pslot:SetAutoSize(true)
     pslot:SetPosition(ui.pos)
-    local col = vbox(tree)
-    panel:SetContent(col)
+    local layout = hbox(tree)
+    glass:SetContent(layout)
 
-    -- title bar (drag handle) + close button
-    local titleRow = hbox(tree)
-    local title = textBlock(tree, 21, COL.title, fontObj, 452)
-    title:SetText(FText("LORT MOD MENU"))
-    local drag = button(tree, title, { Left = 14, Top = 7, Right = 8, Bottom = 7 })
-    addH(titleRow, drag)
-    local x = textBlock(tree, 17, COL.text, nil, 22)
-    x:SetText(FText("X"))
-    local closeB = button(tree, x, { Left = 9, Top = 7, Right = 9, Bottom = 7 }, HALIGN.Center)
-    addH(titleRow, closeB)
-    addV(col, titleRow)
-    clickable({ btn = drag, kind = "drag", color = function(p, h) return h and COL.barHover or COL.bar end })
-    clickable({ btn = closeB, kind = "close", color = function(p, h) return (h or p) and COL.close or COL.bar end })
-
-    -- tabs
-    local tabRow = hbox(tree)
+    -- sidebar
+    local side = border(tree, COL.side, pad(10, 12, 10, 12), 16, { 16, 0, 0, 16 })
+    addH(layout, side, nil, VALIGN.Fill)
+    local sideCol = vbox(tree)
+    side:SetContent(sideCol)
+    local brand = textBlock(tree, 17, COL.title, fontObj, 120)
+    brand:SetText(FText("LORT  MENU"))
+    local brandB = button(tree, brand, pad(6, 2, 6, 10), HALIGN.Left, 8)
+    addV(sideCol, brandB)
+    pcall(function() brandB:SetCursor(9) end)
+    clickable({ btn = brandB, kind = "drag", color = function() return COL.none end })
     for i, name in ipairs(TABS) do
-        local t = textBlock(tree, 12, COL.text, nil, 66)
-        t:SetJustification(1)
-        t:SetText(FText(name))
-        local b = button(tree, t, { Left = 6, Top = 7, Right = 6, Bottom = 7 }, HALIGN.Center)
-        addH(tabRow, b, i > 1 and 2 or nil)
-        ui.tabs[i] = { btn = b, text = t }
+        local row = hbox(tree)
+        local img = StaticConstructObject(C("/Script/UMG.Image"), tree, uname("LortIcon"))
+        local tex = iconTexture(TAB_ICONS[name])
+        if tex then img:SetBrushFromTexture(tex, false) end
+        local isz = sizeBox(tree, 17, 17)
+        isz:SetContent(img)
+        addH(row, isz)
+        local t = textBlock(tree, 13, COL.text, nil, 96)
+        t:SetText(FText(TAB_TITLES[name]))
+        addH(row, t, 9)
+        local b = button(tree, row, pad(10, 7, 10, 7), HALIGN.Left, 10)
+        addV(sideCol, b, 3)
+        ui.tabs[i] = { btn = b, text = t, icon = img }
         clickable({ btn = b, kind = "tab", index = i, color = function(p, h)
-            if ui.tab == i then return COL.tabOn end
-            return (h or p) and COL.tabHover or COL.tab
+            if ui.tab == i then return COL.navOn end
+            return (h or p) and COL.navHover or COL.none
         end })
     end
-    addV(col, tabRow, 2)
 
-    -- rows
+    -- main column
+    local main = border(tree, COL.none, pad(14, 10, 12, 8))
+    addH(layout, main, nil, VALIGN.Fill)
+    local col = vbox(tree)
+    main:SetContent(col)
+
+    local head = hbox(tree)
+    ui.header = textBlock(tree, 20, COL.title, fontObj, nil)
+    local headB = button(tree, ui.header, pad(6, 2, 6, 4), HALIGN.Left, 8)
+    local headSlot = addH(head, headB)
+    pcall(function() headSlot:SetSize({ SizeRule = 1, Value = 1 }) end)   -- fill: pushes X to the right edge
+    pcall(function() headB:SetCursor(9) end)
+    clickable({ btn = headB, kind = "drag", color = function() return COL.none end })
+    local x = textBlock(tree, 10, COL.title, nil, 10); x:SetText(FText("X")); x:SetJustification(1)
+    local closeB = button(tree, x, pad(6, 3, 6, 3), HALIGN.Center, "pill")
+    addH(head, closeB, 6)
+    clickable({ btn = closeB, kind = "close", color = function(p, h) return (h or p) and COL.closeHover or COL.close end })
+    addV(col, head)
+
+    -- rows (scrolling list)
     local rowsBox = vbox(tree)
-    local rowsPad = border(tree, rgba(0, 0, 0, 0), { Left = 10, Top = 8, Right = 4, Bottom = 6 })
-    local sizeBox = StaticConstructObject(C("/Script/UMG.SizeBox"), tree, uname("LortSize"))
-    sizeBox:SetMaxDesiredHeight(MAX_LIST_HEIGHT)
+    local listSize = StaticConstructObject(C("/Script/UMG.SizeBox"), tree, uname("LortListSize"))
+    listSize:SetHeightOverride(PANEL_SIZE.H)
+    ui.listSize = listSize
     local scroll = StaticConstructObject(C("/Script/UMG.ScrollBox"), tree, uname("LortScroll"))
     scroll:AddChild(rowsBox)
-    sizeBox:SetContent(scroll)
-    rowsPad:SetContent(sizeBox)
-    addV(col, rowsPad)
+    listSize:SetContent(scroll)
+    addV(col, listSize, 6)
     ui.scroll = scroll
     for i = 1, ROWS do
         local r = hbox(tree)
-        local label = textBlock(tree, 15, COL.text, nil, 270)
-        local rowB = button(tree, label, { Left = 8, Top = 5, Right = 6, Bottom = 5 })
-        addH(r, rowB)
-        local mt = textBlock(tree, 15, COL.text, nil, 14); mt:SetText(FText("<"))
-        local minus = button(tree, mt, { Left = 7, Top = 4, Right = 7, Bottom = 4 }, HALIGN.Center)
-        addH(r, minus, 6)
-        local vt = textBlock(tree, 14, COL.text, nil, 104); vt:SetJustification(1)
-        local valB = button(tree, vt, { Left = 6, Top = 5, Right = 6, Bottom = 5 }, HALIGN.Center)
-        addH(r, valB, 4)
-        local pt = textBlock(tree, 15, COL.text, nil, 14); pt:SetText(FText(">"))
-        local plus = button(tree, pt, { Left = 7, Top = 4, Right = 7, Bottom = 4 }, HALIGN.Center)
-        addH(r, plus, 4)
-        addV(rowsBox, r, i > 1 and 2 or nil)
-        local row = { box = r, label = label, valueText = vt, minus = minus, plus = plus, value = valB }
+        local label = textBlock(tree, 14, COL.text, nil, nil)
+        local rowB = button(tree, label, pad(9, 6, 6, 6), HALIGN.Left, 9)
+        local rowSlot = addH(r, rowB)
+        pcall(function() rowSlot:SetSize({ SizeRule = 1, Value = 1 }) end)   -- ESlateSizeRule::Fill
+        local rowSize = sizeBox(tree, PANEL_SIZE.W, nil)
+        rowSize:SetContent(r)
+        local row = { box = rowSize, label = label }
+        -- slider: [-] [bar] [value] [+]
+        local mt = textBlock(tree, 14, COL.title, nil, 8); mt:SetText(FText("-")); mt:SetJustification(1)
+        row.minus = button(tree, mt, pad(6, 1, 6, 2), HALIGN.Center, "pill")
+        addH(r, row.minus, 6)
+        local barBox = sizeBox(tree, BAR_W, 6)
+        local track = border(tree, COL.track, pad(0, 0, 0, 0), "pill")
+        pcall(function() track:SetHorizontalAlignment(HALIGN.Left); track:SetVerticalAlignment(VALIGN.Fill) end)
+        barBox:SetContent(track)
+        row.fillBox = sizeBox(tree, BAR_W, 6)
+        row.fillBox:SetContent(border(tree, COL.fill, pad(0, 0, 0, 0), "pill"))
+        track:SetContent(row.fillBox)
+        row.bar = barBox
+        addH(r, barBox, 7)
+        row.valueText = textBlock(tree, 13, COL.text, nil, 54); row.valueText:SetJustification(1)
+        addH(r, row.valueText, 4)
+        local pt = textBlock(tree, 14, COL.title, nil, 8); pt:SetText(FText("+")); pt:SetJustification(1)
+        row.plus = button(tree, pt, pad(6, 1, 6, 2), HALIGN.Center, "pill")
+        addH(r, row.plus, 2)
+        -- toggle switch: pill track with a white knob that slides left/right
+        local knobBox = sizeBox(tree, 12, 12)
+        knobBox:SetContent(border(tree, WHITE, pad(0, 0, 0, 0), "pill"))
+        local sw, swSlot = button(tree, knobBox, pad(2, 2, 2, 2), HALIGN.Left, "pill")
+        local swBox = sizeBox(tree, 32, 16)
+        swBox:SetContent(sw)
+        row.switch, row.switchSlot, row.switchBox = sw, swSlot, swBox
+        addH(r, swBox, 8)
+        -- pill: RUN for actions, the bound key for hotkey rows
+        row.pillText = textBlock(tree, 12, COL.title, nil, 44); row.pillText:SetJustification(1)
+        row.pill = button(tree, row.pillText, pad(12, 3, 12, 3), HALIGN.Center, "pill")
+        addH(r, row.pill, 8)
+        addV(rowsBox, rowSize, i > 1 and 2 or nil)
         ui.rows[i] = row
         clickable({ btn = rowB, kind = "row", index = i, color = function(p, h)
-            if p then return COL.rowHover end
-            if h then return COL.rowHover end
-            return (ui.sel == i) and COL.rowSel or COL.row
+            if p or h then return COL.rowHover end
+            return (ui.sel == i) and COL.rowSel or COL.none
         end })
-        local arrowColor = function(p, h) if p then return COL.press end return h and COL.btnHover or COL.btn end
-        clickable({ btn = minus, kind = "minus", index = i, color = arrowColor, repeats = true })
-        clickable({ btn = plus, kind = "plus", index = i, color = arrowColor, repeats = true })
-        clickable({ btn = valB, kind = "value", index = i, color = function(p, h)
+        local pmColor = function(p, h) if p then return COL.pmPress end return h and COL.pmHover or COL.pm end
+        clickable({ btn = row.minus, kind = "minus", index = i, color = pmColor, repeats = true })
+        clickable({ btn = row.plus, kind = "plus", index = i, color = pmColor, repeats = true })
+        clickable({ btn = sw, kind = "value", index = i, part = "switch", color = function(p, h)
             local it = row.item
-            local c = COL.val
-            if it then
-                if it.kind == "toggle" then c = eff(it) and COL.on or COL.off
-                elseif it.kind == "action" then c = COL.run
-                elseif it.kind == "keybind" then c = COL.btn end
-            end
-            if p then return COL.press end
-            if h and it and it.kind ~= "slider" then return { R = c.R * 1.25, G = c.G * 1.25, B = c.B * 1.25, A = 1 } end
+            local on = it and it.kind == "toggle" and eff(it)
+            local c = on and COL.on or COL.off
+            if h then c = { R = math.min(1, c.R * 1.15), G = math.min(1, c.G * 1.15), B = math.min(1, c.B * 1.15), A = math.min(1, c.A + 0.1) } end
             return c
+        end })
+        clickable({ btn = row.pill, kind = "value", index = i, part = "pill", color = function(p, h)
+            local it = row.item
+            if it and it.kind == "keybind" then
+                if ui.listen and ui.listen.item == it then return COL.listen end
+                return (h or p) and COL.pmHover or COL.key
+            end
+            return (h or p) and COL.runHover or COL.run
         end })
     end
 
-    -- footer
-    local foot = border(tree, COL.bar, { Left = 12, Top = 5, Right = 12, Bottom = 6 })
-    local footRow = hbox(tree)
-    ui.status = textBlock(tree, 11, COL.dim, nil, 440)
-    addH(footRow, ui.status)
-    local gt = textBlock(tree, 11, COL.title, nil, 18); gt:SetText(FText("//"))
-    local grip = button(tree, gt, { Left = 6, Top = 2, Right = 4, Bottom = 2 }, HALIGN.Center)
-    addH(footRow, grip, 6)
-    foot:SetContent(footRow)
-    addV(col, foot)
-    clickable({ btn = grip, kind = "resize", color = function(p, h) if p then return COL.press end return h and COL.btnHover or COL.btn end })
+    -- footer: hint
+    local foot = hbox(tree)
+    ui.status = textBlock(tree, 10, COL.dim, nil, 300)
+    addH(foot, ui.status)
+    addV(col, foot, 6)
 
-    -- toast
-    local tb = border(tree, rgba(0, 0, 0, 0.6), { Left = 18, Top = 8, Right = 18, Bottom = 8 })
+    -- window grab areas: top edge moves, other edges and all corners resize (with Windows resize cursors)
+    local CUR = { LR = 3, UD = 4, SE = 5, SW = 6, MOVE = 9 }
+    local HANDLES = {
+        { "top",    HALIGN.Fill,  VALIGN.Top,    nil, 9,  0,  0, CUR.MOVE, "drag" },
+        { "bottom", HALIGN.Fill,  VALIGN.Bottom, nil, 7,  0,  1, CUR.UD },
+        { "left",   HALIGN.Left,  VALIGN.Fill,   7, nil, -1,  0, CUR.LR },
+        { "right",  HALIGN.Right, VALIGN.Fill,   7, nil,  1,  0, CUR.LR },
+        { "tl",     HALIGN.Left,  VALIGN.Top,   16, 16, -1, -1, CUR.SE },
+        { "tr",     HALIGN.Right, VALIGN.Top,   16, 16,  1, -1, CUR.SW },
+        { "bl",     HALIGN.Left,  VALIGN.Bottom, 16, 16, -1,  1, CUR.SW },
+        { "br",     HALIGN.Right, VALIGN.Bottom, 16, 16,  1,  1, CUR.SE },
+    }
+    for _, hd in ipairs(HANDLES) do
+        local box = sizeBox(tree, hd[4], hd[5])
+        local hb = button(tree, box, pad(0, 0, 0, 0), HALIGN.Fill, (hd[4] and hd[5]) and 8 or 4)
+        hb:SetBackgroundColor(COL.none)
+        pcall(function() hb:SetCursor(hd[8]) end)
+        local hs = frame:AddChildToOverlay(hb)
+        pcall(function() hs:SetHorizontalAlignment(hd[2]); hs:SetVerticalAlignment(hd[3]) end)
+        clickable({ btn = hb, kind = hd[9] or "resize", dx = hd[6], dy = hd[7], color = function() return COL.none end })
+    end
+
+    -- toast (also glass)
+    local tb = border(tree, rgba(0, 0, 0, 0.45), pad(20, 8, 20, 8), "pill")
     local ts = canvas:AddChildToCanvas(tb)
     ts:SetAutoSize(true)
     ts:SetAnchors({ Minimum = { X = 0.5, Y = 0.0 }, Maximum = { X = 0.5, Y = 0.0 } })
     ts:SetAlignment({ X = 0.5, Y = 0.0 })
     ts:SetPosition({ X = 0, Y = 70 })
-    local tt = textBlock(tree, 30, COL.title, fontObj)
+    local tt = textBlock(tree, 26, COL.title, fontObj)
     tb:SetContent(tt)
 
     w:SetVisibility(VIS.SelfHitTestInvisible)
     w:AddToViewport(900)
-    ui.widget, ui.panel, ui.panelSlot, ui.toastBorder, ui.toastText = w, panel, pslot, tb, tt
-    panel:SetRenderTransformPivot({ X = 0, Y = 0 })
+    ui.widget, ui.panel, ui.panelSlot, ui.toastBorder, ui.toastText = w, blur, pslot, tb, tt
+    blur:SetRenderTransformPivot({ X = 0, Y = 0 })
     ui.appliedScale = nil
     ui.toastUntil = 0
-    panel:SetVisibility(ui.open and VIS.Visible or VIS.Collapsed)
+    blur:SetVisibility(ui.open and VIS.Visible or VIS.Collapsed)
     tb:SetVisibility(VIS.Collapsed)
-    log("UI built (tabbed, " .. ROWS .. " rows)")
+    log("UI built (frosted glass, " .. ROWS .. " rows)")
     return true
 end
 
@@ -1115,11 +1267,17 @@ local function valueText(it)
         return it.fmt(v), c
     elseif it.kind == "action" then return "RUN", WHITE
     elseif it.kind == "keybind" then
-        if ui.listen and ui.listen.item == it then return "press a key...", COL.chaos end
+        if ui.listen and ui.listen.item == it then return "press...", COL.title end
         local k = (it.target == "menu") and MENU_KEY or HOTKEYS[it.target.hk]
         return k or "none", k and COL.title or COL.dim
     end
     return "", COL.text
+end
+
+function APPLY_SIZE()
+    if not valid(ui.listSize) then return end
+    ui.listSize:SetHeightOverride(PANEL_SIZE.H)
+    for _, row in ipairs(ui.rows) do row.box:SetWidthOverride(PANEL_SIZE.W) end
 end
 
 local function applyScale()
@@ -1136,6 +1294,7 @@ local function render()
     local list = curItems()
     if ui.sel > #list then ui.sel = #list end
     if ui.sel < 1 then ui.sel = 1 end
+    ui.header:SetText(FText(TAB_TITLES[TABS[ui.tab]]))
     for i = 1, ROWS do
         local row = ui.rows[i]
         local it = list[i]
@@ -1148,20 +1307,50 @@ local function render()
             local hk = it.hk and HOTKEYS[it.hk]
             if hk then lbl = lbl .. "   [" .. hk .. "]" end
             row.label:SetText(FText(lbl))
-            row.label:SetColorAndOpacity(slate(ui.sel == i and COL.title or COL.text))
+            row.label:SetColorAndOpacity(slate(ui.sel == i and COL.sel or COL.text))
+            local isSlider, isToggle = it.kind == "slider", it.kind == "toggle"
+            local isPill = it.kind == "action" or it.kind == "keybind"
+            local sv = isSlider and VIS.Visible or VIS.Collapsed
+            row.minus:SetVisibility(sv); row.plus:SetVisibility(sv); row.bar:SetVisibility(sv); row.valueText:SetVisibility(sv)
+            row.switchBox:SetVisibility(isToggle and VIS.Visible or VIS.Collapsed)
+            row.pill:SetVisibility(isPill and VIS.Visible or VIS.Collapsed)
             local vt, vc = valueText(it)
-            row.valueText:SetText(FText(vt))
-            row.valueText:SetColorAndOpacity(slate(vc))
-            local arrows = (it.kind == "slider") and VIS.Visible or VIS.Hidden
-            row.minus:SetVisibility(arrows)
-            row.plus:SetVisibility(arrows)
+            if isSlider then
+                row.valueText:SetText(FText(vt))
+                row.valueText:SetColorAndOpacity(slate(vc))
+                local v = eff(it)
+                local frac = (it.hi > it.lo) and clamp((v - it.lo) / (it.hi - it.lo), 0, 1) or 0
+                row.fillBox:SetWidthOverride(math.max(6, BAR_W * frac))
+            elseif isToggle then
+                pcall(function() row.switchSlot:SetHorizontalAlignment(eff(it) and HALIGN.Right or HALIGN.Left) end)
+            elseif isPill then
+                row.pillText:SetText(FText(vt))
+                row.pillText:SetColorAndOpacity(slate(vc))
+            end
         end
     end
-    for i, t in ipairs(ui.tabs) do t.text:SetColorAndOpacity(slate(ui.tab == i and COL.dark or COL.text)) end
-    local st = "Drag title: move  -  drag // : resize  -  wheel: scroll  -  Del reset  -  " .. MENU_KEY .. " close"
-    if chaos.on then st = "CHAOS: " .. (chaos.active or "waiting...") .. "     " .. st end
+    for i, t in ipairs(ui.tabs) do
+        local on = ui.tab == i
+        t.text:SetColorAndOpacity(slate(on and COL.dark or COL.text))
+        pcall(function() t.icon:SetColorAndOpacity(on and COL.dark or WHITE) end)
+    end
+    local st = "drag top: move  -  drag edges / corners: resize  -  wheel scroll  -  " .. MENU_KEY .. " close"
+    if chaos.on then st = "CHAOS: " .. (chaos.active or "waiting...") .. "   " .. st end
     ui.status:SetText(FText(st))
-    for _, c in ipairs(ui.clickables) do c.lastColor = nil end   -- force recolour
+    -- only poll what's visible: hidden rows/controls are skipped (big win for drag smoothness)
+    ui.active = {}
+    for _, c in ipairs(ui.clickables) do
+        c.lastColor = nil   -- force recolour
+        local keep = true
+        if c.index and (c.kind == "row" or c.kind == "minus" or c.kind == "plus" or c.kind == "value") then
+            local it = ui.rows[c.index] and ui.rows[c.index].item
+            if not it then keep = false
+            elseif c.kind == "minus" or c.kind == "plus" then keep = it.kind == "slider"
+            elseif c.part == "switch" then keep = it.kind == "toggle"
+            elseif c.part == "pill" then keep = it.kind == "action" or it.kind == "keybind" end
+        end
+        if keep then ui.active[#ui.active + 1] = c end
+    end
 end
 
 toast = function(text, seconds)
@@ -1185,6 +1374,9 @@ local function setMouseMode(on)
     local wbl = libs()
     if on then
         safe("input mode UI", function() wbl:SetInputMode_GameAndUIEx(pc, ui.panel, 0, false, false) end)
+        -- keep keyboard focus on the game viewport: otherwise the focused widget swallows every key and
+        -- F1 / hotkeys / key capture (all read via PlayerController:IsInputKeyDown) stop working
+        safe("focus game", function() wbl:SetFocusToGameViewport() end)
         pc.bShowMouseCursor = true
         safe("ignore look", function() pc:SetIgnoreLookInput(true) end)
     else
@@ -1208,14 +1400,16 @@ end
 ---------------------------------------------------------------------------------------------------
 function RESET_PANEL()
     ui.pos = { X = 60, Y = 90 }
+    PANEL_SIZE.W, PANEL_SIZE.H = 470, 390
+    APPLY_SIZE()
     if byId.menusize then byId.menusize.value = 1 end
     ui.appliedScale = nil
     if valid(ui.panel) then ui.panel:SetRenderScale({ X = 1, Y = 1 }); ui.appliedScale = 1 end
     if valid(ui.panelSlot) then ui.panelSlot:SetPosition(ui.pos) end
     SAVE_ALL()
 end
-function SAVE_ALL() saveSettings(); local f = io.open(SETTINGS_FILE, "a"); if f then f:write(string.format("panelX=%.0f\npanelY=%.0f\n", ui.pos.X, ui.pos.Y)); f:close() end end
-local function saveAll() saveSettings(); local f = io.open(SETTINGS_FILE, "a"); if f then f:write(string.format("panelX=%.0f\npanelY=%.0f\n", ui.pos.X, ui.pos.Y)); f:close() end end
+function SAVE_ALL() saveSettings(); local f = io.open(SETTINGS_FILE, "a"); if f then f:write(string.format("panelX=%.0f\npanelY=%.0f\npanelW=%.0f\npanelH=%.0f\n", ui.pos.X, ui.pos.Y, PANEL_SIZE.W, PANEL_SIZE.H)); f:close() end end
+local function saveAll() saveSettings(); local f = io.open(SETTINGS_FILE, "a"); if f then f:write(string.format("panelX=%.0f\npanelY=%.0f\npanelW=%.0f\npanelH=%.0f\n", ui.pos.X, ui.pos.Y, PANEL_SIZE.W, PANEL_SIZE.H)); f:close() end end
 
 local function change(it, dir)
     if not it then return end
@@ -1298,37 +1492,48 @@ local function pollMouse()
     local pc = getPC()
     if pc and not pc.bShowMouseCursor then pc.bShowMouseCursor = true end
     local now = os.clock()
-    for _, c in ipairs(ui.clickables) do
+    local list = ui.active or ui.clickables
+    if ui.dragging then list = { ui.dragging.c } elseif ui.resizing then list = { ui.resizing.c } end
+    for _, c in ipairs(list) do
         local p = c.btn:IsPressed() == true
-        local h = hovered(c.btn)
+        local h = (ui.dragging or ui.resizing) and true or hovered(c.btn)
         -- colour
         local col = c.color(p, h)
         if not sameColor(col, c.lastColor) then c.btn:SetBackgroundColor(col); c.lastColor = col end
         -- drag
         if c.kind == "resize" then
-            if p then
+            if p and (not ui.resizing or ui.resizing.c == c) then
                 local mx, my = mousePos()
                 if mx then
                     if not ui.resizing then
-                        ui.resizing = { mx = mx, my = my, sc = byId.menusize.value }
+                        ui.resizing = { c = c, mx = mx, my = my, w = PANEL_SIZE.W, h = PANEL_SIZE.H, x = ui.pos.X, y = ui.pos.Y }
                     else
                         local r = ui.resizing
-                        local d = ((mx - r.mx) + (my - r.my)) / 2
-                        local sc = clamp(math.floor((r.sc * (1 + d / 450)) * 20 + 0.5) / 20, byId.menusize.lo, byId.menusize.hi)
-                        if not near(sc, byId.menusize.value) then byId.menusize.value = sc; applyScale() end
+                        local sc = byId.menusize and byId.menusize.value or 1
+                        local ddx, ddy = (mx - r.mx) / sc, (my - r.my) / sc
+                        local nw, nh = r.w, r.h
+                        if c.dx ~= 0 then nw = clamp(r.w + c.dx * ddx, MIN_W, MAX_W) end
+                        if c.dy ~= 0 then nh = clamp(r.h + c.dy * ddy, MIN_H, MAX_H) end
+                        local nx = (c.dx < 0) and (r.x + (r.w - nw) * sc) or r.x
+                        local ny = (c.dy < 0) and (r.y + (r.h - nh) * sc) or r.y
+                        if not near(nw, PANEL_SIZE.W) or not near(nh, PANEL_SIZE.H) then
+                            PANEL_SIZE.W, PANEL_SIZE.H = nw, nh
+                            APPLY_SIZE()
+                            ui.pos = { X = nx, Y = ny }
+                            ui.panelSlot:SetPosition(ui.pos)
+                        end
                     end
                 end
-            elseif ui.resizing then
+            elseif not p and ui.resizing and ui.resizing.c == c then
                 ui.resizing = nil
                 SAVE_ALL()
-                render()
             end
         elseif c.kind == "drag" then
-            if p then
+            if p and (not ui.dragging or ui.dragging.c == c) then
                 local mx, my = mousePos()
                 if mx then
                     if not ui.dragging then
-                        ui.dragging = { mx = mx, my = my, x = ui.pos.X, y = ui.pos.Y }
+                        ui.dragging = { c = c, mx = mx, my = my, x = ui.pos.X, y = ui.pos.Y }
                     else
                         local d = ui.dragging
                         local _, wll = libs()
@@ -1339,7 +1544,7 @@ local function pollMouse()
                         ui.panelSlot:SetPosition(ui.pos)
                     end
                 end
-            elseif ui.dragging then
+            elseif not p and ui.dragging and ui.dragging.c == c then
                 ui.dragging = nil
                 saveAll()
             end
@@ -1365,8 +1570,8 @@ end
 ---------------------------------------------------------------------------------------------------
 -- keys are read on the game thread with PlayerController:IsInputKeyDown (edge-detected)
 local KEYS = {
-    { "F1", function() setOpen(not ui.open) end, false },
-    { "Insert", function() setOpen(not ui.open) end, false },
+    { "F1", function() end, false, false, true },        -- [1] = menu key: handled by OS keybind (disabled here)
+    { "Insert", function() end, false, false, true },    -- handled by OS keybind
     { "Up", function() moveSel(-1) end, true },
     { "Down", function() moveSel(1) end, true },
     { "Left", function() change(selItem(), -1) end, true, true },
@@ -1384,7 +1589,57 @@ local KEYS = {
     { "NumPadFive", function() activate(selItem()) end, true },
 }
 for _, k in ipairs(KEYS) do k.key = { KeyName = FName(k[1]) } end
-function APPLY_MENU_KEY() KEYS[1][1] = MENU_KEY; KEYS[1].key = { KeyName = FName(MENU_KEY) } end   -- KEYS[1] = menu key
+-- OS-level keybinds for the menu key and key capture. PlayerController:IsInputKeyDown is blind while the
+-- game's own UI owns input (main menu, CommonUI screens), so these use UE4SS RegisterKeyBind. The callback
+-- only queues work onto the game thread (no game calls on UE4SS's thread), and fires once per key press.
+local UE4SS_KEY = {
+    Zero = "ZERO", One = "ONE", Two = "TWO", Three = "THREE", Four = "FOUR", Five = "FIVE", Six = "SIX",
+    Seven = "SEVEN", Eight = "EIGHT", Nine = "NINE",
+    NumPadZero = "NUM_ZERO", NumPadOne = "NUM_ONE", NumPadTwo = "NUM_TWO", NumPadThree = "NUM_THREE",
+    NumPadFour = "NUM_FOUR", NumPadFive = "NUM_FIVE", NumPadSix = "NUM_SIX", NumPadSeven = "NUM_SEVEN",
+    NumPadEight = "NUM_EIGHT", NumPadNine = "NUM_NINE",
+    Insert = "INS", Home = "HOME", End = "END", PageUp = "PAGE_UP", PageDown = "PAGE_DOWN", Delete = "DEL",
+    Tab = "TAB", CapsLock = "CAPS_LOCK", Escape = "ESCAPE", BackSpace = "BACKSPACE", Enter = "RETURN",
+    Multiply = "MULTIPLY", Add = "ADD", Subtract = "SUBTRACT", Decimal = "DECIMAL", Divide = "DIVIDE",
+    Tilde = "OEM_THREE", Hyphen = "OEM_MINUS", Equals = "OEM_PLUS", LeftBracket = "OEM_FOUR",
+    RightBracket = "OEM_SIX", Semicolon = "OEM_ONE", Apostrophe = "OEM_SEVEN", Comma = "OEM_COMMA",
+    Period = "OEM_PERIOD", Slash = "OEM_TWO", Backslash = "OEM_FIVE",
+    MiddleMouseButton = "MIDDLE_MOUSE_BUTTON", ThumbMouseButton = "XBUTTON_ONE", ThumbMouseButton2 = "XBUTTON_TWO",
+}
+local function ue4ssKey(name)
+    local k = UE4SS_KEY[name] or name   -- letters and F1..F12 have the same name
+    return Key and Key[k]
+end
+local osHandlers = {}   -- FKey name -> list of handlers
+local osRegistered = {}
+local function onOsKey(name, fn)
+    osHandlers[name] = osHandlers[name] or {}
+    table.insert(osHandlers[name], fn)
+    if osRegistered[name] then return end
+    local k = ue4ssKey(name)
+    if not k then return end
+    osRegistered[name] = true
+    RegisterKeyBind(k, function()
+        ExecuteInGameThread(function()
+            for _, h in ipairs(osHandlers[name] or {}) do safe("oskey " .. name, h, name) end
+        end)
+    end)
+end
+
+local lastMenuToggle = 0
+local function menuKeyPressed(name)
+    if name ~= MENU_KEY and name ~= "Insert" then return end
+    if ui.listen then return end                       -- the press is being captured as a binding
+    if os.clock() - lastMenuToggle < 0.25 then return end
+    lastMenuToggle = os.clock()
+    setOpen(not ui.open)
+end
+
+function APPLY_MENU_KEY()
+    KEYS[1][1] = MENU_KEY; KEYS[1].key = { KeyName = FName(MENU_KEY) }
+    onOsKey(MENU_KEY, menuKeyPressed)
+end
+onOsKey("Insert", menuKeyPressed)
 
 -- keys that can be captured for the menu key / hotkeys
 local CAPTURE = {}
@@ -1400,9 +1655,10 @@ for _, n in ipairs({ "Insert", "Home", "End", "PageUp", "PageDown", "Delete", "T
     "Subtract", "Decimal", "Divide", "MiddleMouseButton", "ThumbMouseButton", "ThumbMouseButton2",
     "Escape", "BackSpace" }) do CAPTURE[#CAPTURE + 1] = n end
 local CAPTURE_KEYS = {}
+local captureKey   -- forward
 for i, n in ipairs(CAPTURE) do CAPTURE_KEYS[i] = { name = n, key = { KeyName = FName(n) } } end
 
-local function captureKey(name)
+captureKey = function(name)
     local l = ui.listen
     ui.listen = nil
     if name == "Escape" then toast("Cancelled", 1.2); return end
@@ -1421,6 +1677,12 @@ local function captureKey(name)
         end
     end
     SAVE_ALL()
+end
+
+for _, n in ipairs(CAPTURE) do
+    onOsKey(n, function(name)
+        if ui.listen and ui.listen.armed then captureKey(name); render() end
+    end)
 end
 
 local hkDown = {}
@@ -1460,6 +1722,7 @@ local function pollKeys()
         end
     end
     for _, k in ipairs(KEYS) do
+        if k[5] then goto continue end
         local down = pc:IsInputKeyDown(k.key) == true
         if down and (ui.open or not k[3]) then
             local fire = false
@@ -1468,6 +1731,7 @@ local function pollKeys()
             if fire then safe("key " .. k[1], k[2]); render() end
         end
         k.down = down
+        ::continue::
     end
 end
 
@@ -1498,13 +1762,17 @@ local function tick()
 end
 
 -- one game-thread loop drives everything
-local FRAME_MS = 33
+local FRAME_MS = 16
 local tickAcc = 0
 local frames = 0
 gameLoop(FRAME_MS, function()
     frames = frames + 1
-    safe("keys", pollKeys)
-    if ui.open then safe("mouse", pollMouse) end
+    if frames == 480 then   -- test hook: open.flag opens the menu ~8 s after start, even at the main menu
+        local of = io.open(MOD_DIR .. "open.flag", "r")
+        if of then of:close(); if not ui.open then safe("open.flag", setOpen, true) end end
+    end
+    if frames % 2 == 1 or ui.listen then safe("keys", pollKeys) end
+    if ui.open and (ui.dragging or ui.resizing or frames % 2 == 0) then safe("mouse", pollMouse) end
     safe("fly", flyStep, FRAME_MS)
     safe("anim", animStep)
     tickAcc = tickAcc + FRAME_MS
