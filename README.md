@@ -3,7 +3,7 @@
 An in-game mod menu for **LORT**, with gameplay tweaks, fun extras, hotkeys and an achievement unlocker. It's a
 UE4SS Lua mod.
 
-**Requires** UE4SS with the LORT layout fix: [lort-ue4ss](https://github.com/9vsv6/lort-ue4ss).
+**Requires** UE4SS with the LORT layout fix: [LORT-UE4SS](https://github.com/9vsv6/LORT-UE4SS).
 
 > ⚠️ **Co-op: the menu only works when YOU are the host.**
 > In LORT the host's game is the server and has the final say on health, damage, cooldowns, items, gold,
@@ -13,7 +13,7 @@ UE4SS Lua mod.
 > Solo play always works.
 
 ## Install
-1. Install UE4SS and the layout fix by following [lort-ue4ss](https://github.com/9vsv6/lort-ue4ss).
+1. Install UE4SS and the layout fix by following [LORT-UE4SS](https://github.com/9vsv6/LORT-UE4SS).
 2. Copy the `LortModMenu` folder into `...\LORT\bw\Binaries\Win64\ue4ss\Mods\`.
 3. Add this line to `ue4ss\Mods\mods.txt`, above the `Keybinds` line:
    ```
@@ -194,7 +194,7 @@ every tweak and logs the results to `LortModMenu\menu.log`.
 - Pick hotkeys the game doesn't use (F2–F12, numpad, Home/End, side mouse buttons). A hotkey still does its
   normal in-game action too.
 - A LORT update can break the UE4SS layout fix. If the game crashes on start, check
-  [lort-ue4ss](https://github.com/9vsv6/lort-ue4ss).
+  [LORT-UE4SS](https://github.com/9vsv6/LORT-UE4SS).
 - "Damage ×" changes `DamageMultiplier`, which is additive. If the damage numbers don't change much for your
   build, use One-Hit Kills.
 
