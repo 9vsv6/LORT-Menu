@@ -3,13 +3,6 @@
 An in-game mod menu for **LORT**, with gameplay tweaks, fun extras, hotkeys and an achievement unlocker. It's a
 UE4SS Lua mod.
 
-The menu is a real in-game **frosted-glass window** built from UMG widgets:
-- a see-through, blurred, rounded panel with an icon sidebar for the sections;
-- iPhone-style toggle switches, slider bars and pill buttons;
-- LORT's own font for the titles.
-
-It works with **mouse and keyboard**, and you can **move it and resize it like a Windows window**.
-
 **Requires** UE4SS with the LORT layout fix: [lort-ue4ss](https://github.com/9vsv6/lort-ue4ss).
 
 > ⚠️ **Co-op: the menu only works when YOU are the host.**
