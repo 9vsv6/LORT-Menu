@@ -1,4 +1,4 @@
-# LORT Mod Menu
+# LORT Menu
 
 An in-game mod menu for **LORT**, with gameplay tweaks, fun extras, hotkeys and an achievement unlocker. It's a
 UE4SS Lua mod.
